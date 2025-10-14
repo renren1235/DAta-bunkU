@@ -1,0 +1,9 @@
+Inserting 5000 rows (batch size 500 ) into samples_load_test2.db
+Rows before: 0
+DB size before (bytes): 12288
+Rows after: 5000
+Elapsed seconds: 0.086
+Inserts/sec: 57837.5
+DB size after (bytes): 2822144
+DB size added (bytes): 2809856
+Average bytes per inserted row: 562.0

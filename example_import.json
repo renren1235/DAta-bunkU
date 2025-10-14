@@ -1,0 +1,4 @@
+[
+  {"sample_no":"S001","Ba":1.0,"Zr":0.4,"Ce":0.4,"Y":0.2,"O":3.0,"thickness_mm":1.0,"electrode_diameter_mm":5.0,"R_600":1200.0,"R_550":1500.0,"synthesis_method":"solid-state","calcination_temp_c":1200,"calcination_time_h":10.0,"relative_density_pct":95.0,"atmosphere":"Air"},
+  {"sample_no":"S002","Ba":1.0,"Zr":0.1,"Ce":0.7,"Y":0.2,"O":3.0,"thickness_mm":0.8,"electrode_diameter_mm":4.5,"R_600":2000.0,"R_550":2500.0,"synthesis_method":"sol-gel","calcination_temp_c":1150,"calcination_time_h":8.0,"relative_density_pct":93.5,"atmosphere":"Air"}
+]
