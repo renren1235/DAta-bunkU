@@ -186,9 +186,11 @@ def get_db_connection():
 	return conn
 
 
-def compute_theoretical_density(composition: dict, unit_cell_vol_ang3: float) -> float:
+
+def compute_theoretical_density(composition: dict, unit_cell_vol_ang3: float, z_per_cell: float = 1.0) -> float:
 	"""Compute theoretical density (g/cm3) given composition dict and unit cell volume in Å^3.
-	Assumes 1 formula unit per unit cell by default. Returns None if cannot compute.
+	If z_per_cell is provided, it is used as the number of formula units per crystallographic unit cell.
+	Returns None if cannot compute.
 	"""
 	if not composition or not unit_cell_vol_ang3:
 		return None
@@ -220,24 +222,30 @@ def compute_theoretical_density(composition: dict, unit_cell_vol_ang3: float) ->
 		if aw is None:
 			continue
 		mass_per_formula += aw * float(coeff)
+	# convert Å^3 to cm^3 (1 Å^3 = 1e-24 cm^3)
 	v_cm3 = unit_cell_vol_ang3 * 1e-24
 	NA = 6.02214076e23
 	if v_cm3 <= 0:
 		return None
-	rho = mass_per_formula / (NA * v_cm3)
+	# mass_per_formula is in g/mol; divide by NA to get g per formula unit,
+	# multiply by z_per_cell to get mass per unit cell (g), then divide by unit cell volume (cm^3)
+	rho = (mass_per_formula * float(z_per_cell)) / (NA * v_cm3)
 	return rho
 
 
-def compute_theoretical_density_debug(composition: dict, unit_cell_vol_ang3: float) -> dict:
+
+def compute_theoretical_density_debug(composition: dict, unit_cell_vol_ang3: float, z_per_cell: float = 1.0) -> dict:
 	"""Compute same values as compute_theoretical_density but return intermediate values for debugging.
-	Returns a dict with keys: mass_per_formula (g/mol), v_cm3, NA, base_theo (g/cm3 for Z=1).
+	Returns a dict with keys: mass_per_formula (g/mol), v_cm3, NA, base_per_formula (g/cm3 for Z=1),
+	and final_density (g/cm3) which includes z_per_cell.
 	"""
 	debug = {
 		'composition': composition,
 		'mass_per_formula': None,
 		'v_cm3': None,
 		'NA': 6.02214076e23,
-		'base_theo': None,
+		'base_per_formula': None,
+		'final_density': None,
 	}
 	if not composition or not unit_cell_vol_ang3:
 		return debug
@@ -274,7 +282,10 @@ def compute_theoretical_density_debug(composition: dict, unit_cell_vol_ang3: flo
 	debug['mass_per_formula'] = mass_per_formula
 	debug['v_cm3'] = v_cm3
 	if v_cm3 and v_cm3 > 0:
-		debug['base_theo'] = mass_per_formula / (debug['NA'] * v_cm3)
+		# base per formula unit (Z = 1)
+		debug['base_per_formula'] = mass_per_formula / (debug['NA'] * v_cm3)
+		# final density including Z formula units per cell
+		debug['final_density'] = (mass_per_formula * float(z_per_cell)) / (debug['NA'] * v_cm3)
 	return debug
 
 
@@ -567,7 +578,88 @@ with st.form("sample_form", clear_on_submit=False):
 	# Use session_state-backed composition text so preset selection can update it immediately
 	comp_text = comp_text_area.text_area("組成 JSON (例: {\"Ba\":0.5, \"Zr\":0.5})", value=st.session_state.get('composition_text', ''), height=120, key='composition_text')
 
+	# Two form submit buttons: one to save, another to compute densities using current form values
+	# Primary form submit (保存) and a separate compute button.
+	# Note: st.form_submit_button does not accept a `key` argument in this Streamlit version,
+	# so we call it without `key` and rely on the returned booleans to determine which
+	# button was pressed.
 	submitted = st.form_submit_button("保存")
+	compute_in_form = st.form_submit_button("相対密度を算出（フォーム内）")
+
+	# If the user pressed the in-form compute button, calculate densities from current form fields
+	if compute_in_form:
+		# Use the form variables (thickness_mm, pellet_*, unit_cell_vol, composition text, z_per_cell) which are in-scope here
+		try:
+			# Measured density (use pellet geometry prefixed fields)
+			pmass_f = safe_float(st.session_state.get('pellet_mass_g') or pellet_mass_g or 0.0)
+			pth_f = safe_float(st.session_state.get('pellet_thickness_mm') or pellet_thickness_mm or 0.0)
+			pdia_f = safe_float(st.session_state.get('pellet_diameter_mm') or pellet_diameter_mm or 0.0)
+			meas_val = None
+			if pmass_f and pth_f and pdia_f:
+				th_cm = pth_f / 10.0
+				d_cm = pdia_f / 10.0
+				vol_cm3 = math.pi * (d_cm / 2.0) ** 2 * th_cm
+				if vol_cm3 > 0:
+					meas_val = pmass_f / vol_cm3
+		except Exception as e:
+			meas_val = None
+
+		# Theoretical density: prefer manual input, else compute from composition + unit cell vol and Z
+		try:
+			manual_theo_f = safe_float(st.session_state.get('theoretical_density_input') or theoretical_density_input or 0.0)
+		except Exception:
+			manual_theo_f = 0.0
+		theo_val = None
+		try:
+			if manual_theo_f and manual_theo_f > 0:
+				theo_val = manual_theo_f
+			else:
+				ucv_f = safe_float(st.session_state.get('unit_cell_vol') or unit_cell_vol or 0.0)
+				comp_json_f = st.session_state.get('composition_text') or comp_text or '{}'
+				comp_dict_f = {}
+				try:
+					comp_dict_f = json.loads(comp_json_f) if comp_json_f and comp_json_f.strip() else {}
+				except Exception:
+					comp_dict_f = {}
+				if ucv_f and comp_dict_f:
+					z_f = safe_float(st.session_state.get('z_per_cell') or z_per_cell or 1.0)
+					base_t = compute_theoretical_density(comp_dict_f, float(ucv_f), float(z_f))
+					if base_t is not None:
+						theo_val = base_t
+		except Exception:
+			theo_val = None
+
+		rel_val = None
+		if meas_val is not None and theo_val is not None and theo_val > 0:
+			rel_val = (meas_val / theo_val) * 100.0
+
+		# push computed values to session_state so UI reflects them
+		st.session_state['computed_measured_density'] = meas_val
+		st.session_state['computed_theoretical_density'] = theo_val
+		st.session_state['computed_relative_density'] = rel_val
+		st.session_state['measured_density_display_value'] = meas_val
+		st.session_state['theoretical_density_display_value'] = theo_val
+		st.session_state['relative_density_display_value'] = rel_val
+
+		# show debug expander contents inline
+		with st.expander('密度計算デバッグ (中間値)', expanded=True):
+			try:
+				z_dbg_f = float(st.session_state.get('z_per_cell') or z_per_cell or 1.0)
+				dbg = compute_theoretical_density_debug(comp_dict_f if 'comp_dict_f' in locals() else {}, float(ucv_f) if 'ucv_f' in locals() else 0, z_dbg_f)
+				st.write({'pellet_mass_g': pmass_f, 'pellet_thickness_mm': pth_f, 'pellet_diameter_mm': pdia_f, 'measured_density_calc': meas_val, 'manual_theo_input': manual_theo_f, 'z_per_cell': z_dbg_f, 'unit_cell_vol': ucv_f, 'parsed_composition': comp_dict_f, 'theoretical_debug': dbg})
+			except Exception as e:
+				st.write('デバッグ情報の取得に失敗しました:', e)
+
+		# set visible relative input and rerun to refresh form-bound widgets
+		try:
+			st.session_state['relative_density_pct'] = float(rel_val) if rel_val is not None else st.session_state.get('relative_density_pct', 0.0)
+		except Exception:
+			pass
+		if rel_val is not None:
+			st.success(f"計算結果 — 実測密度: {meas_val:.6f} g/cm^3, 理論密度: {theo_val:.6f} g/cm^3, 相対密度: {rel_val:.3f} %")
+		else:
+			st.info('相対密度は計算されませんでした（実測密度か理論密度が不足しています）。')
+		st.experimental_rerun()
 
 # Compute density button must be outside the st.form (Streamlit forbids st.button inside form except form_submit_button)
 compute_col1, compute_col2 = st.columns([1,3])
@@ -575,77 +667,95 @@ with compute_col1:
 	if st.button("相対密度を算出", key='compute_density_outside'):
 		# gather values (prefer session_state values to reflect current widgets)
 		# use pellet-specific geometry for density calculation
-		th = st.session_state.get('pellet_thickness_mm')
-		dia = st.session_state.get('pellet_diameter_mm')
-		pmass = st.session_state.get('pellet_mass_g')
-		manual_theo = st.session_state.get('theoretical_density_input')
-		z = st.session_state.get('z_per_cell', 1.0)
+		th = safe_float(st.session_state.get('pellet_thickness_mm') or 0.0)
+		dia = safe_float(st.session_state.get('pellet_diameter_mm') or 0.0)
+		pmass = safe_float(st.session_state.get('pellet_mass_g') or 0.0)
+		manual_theo = safe_float(st.session_state.get('theoretical_density_input') or 0.0)
+		z = safe_float(st.session_state.get('z_per_cell') or 1.0)
+		# validations
+		errs = []
+		if pmass <= 0:
+			errs.append('ペレット質量が 0 または未設定です（g）。')
+		if th <= 0:
+			errs.append('ペレット厚さが 0 または未設定です（mm）。')
+		if dia <= 0:
+			errs.append('ペレット直径が 0 または未設定です（mm）。')
 		# compute measured
 		meas = None
-		try:
-			if pmass and th and dia:
+		if not errs:
+			try:
 				th_cm = float(th) / 10.0
 				d_cm = float(dia) / 10.0
 				vol_cm3 = math.pi * (d_cm / 2.0) ** 2 * th_cm
 				if vol_cm3 > 0:
 					meas = float(pmass) / vol_cm3
-		except Exception:
-			meas = None
+			except Exception as e:
+				errs.append(f'実測密度計算で例外: {e}')
+		else:
+			# show immediate errors about measured input
+			for e in errs:
+				st.error(e)
 		# compute theoretical: prefer manual, else from composition + unit_cell_vol using Z
 		theo = None
+		comp_dbg = {}
+		ucv_val = safe_float(st.session_state.get('unit_cell_vol') or 0.0)
+		comp_json = st.session_state.get('composition_text') or '{}'
+		# try parse composition; provide clearer message if parse fails
 		try:
-			if manual_theo and float(manual_theo) > 0:
-				theo = float(manual_theo)
+			comp_dbg = json.loads(comp_json) if comp_json and comp_json.strip() else {}
+		except Exception as e:
+			comp_dbg = {}
+			st.error(f'組成 JSON のパースに失敗しました: {e}')
+		# if manual theoretical given, use it
+		if manual_theo and manual_theo > 0:
+			theo = float(manual_theo)
+		else:
+			if ucv_val <= 0:
+				st.warning('格子体積 (unit_cell_vol) が 0 または未設定です。理論密度を計算できません。')
+			elif not comp_dbg:
+				st.warning('組成が空です。プリセットか有効な JSON を入力してください。')
 			else:
-				ucv = float(st.session_state.get('unit_cell_vol') or 0)
-				if ucv and ucv > 0:
-					comp_json = st.session_state.get('composition_text') or '{}'
-					comp = {}
-					try:
-						comp = json.loads(comp_json)
-					except Exception:
-						comp = {}
-					# compute mass per formula unit and multiply by Z per cell
-					base_theo = compute_theoretical_density(comp, ucv)
-					if base_theo is not None:
-						# base_theo assumes 1 formula unit; scale by Z
-						theo = base_theo * float(z)
-		except Exception:
-			theo = None
+				base_theo = None
+				try:
+					base_theo = compute_theoretical_density(comp_dbg, float(ucv_val), float(z))
+				except Exception as e:
+					st.error(f'理論密度計算で例外が発生しました: {e}')
+				if base_theo is not None:
+					theo = base_theo
+		# compute relative if possible
 		rel = None
-		if meas and theo and theo > 0:
+		if meas is not None and theo is not None and theo > 0:
 			rel = (meas / theo) * 100.0
 		# write back to session_state and also update the visible numeric input for relative_density_pct
 		st.session_state['computed_measured_density'] = meas
 		st.session_state['computed_theoretical_density'] = theo
 		st.session_state['theoretical_density_g_cm3'] = theo
 		st.session_state['computed_relative_density'] = rel
-
 		# also set display keys so form number_inputs reflect computed values immediately
 		st.session_state['measured_density_display_value'] = meas
 		st.session_state['theoretical_density_display_value'] = theo
 		st.session_state['relative_density_display_value'] = rel
-
 		# show detailed debug info in an expander for inspection
 		with st.expander('密度計算デバッグ (中間値)', expanded=True):
 			try:
-				ucv_dbg = float(st.session_state.get('unit_cell_vol') or 0)
-				comp_dbg = {}
-				try:
-					comp_dbg = json.loads(st.session_state.get('composition_text') or '{}')
-				except Exception:
-					comp_dbg = {}
-				dbg = compute_theoretical_density_debug(comp_dbg, ucv_dbg) if ucv_dbg else {'composition': comp_dbg}
-				st.write(dbg)
+				dbg = compute_theoretical_density_debug(comp_dbg, float(ucv_val), float(z)) if ucv_val else {'composition': comp_dbg}
+				st.write({'pellet_mass_g': pmass, 'pellet_thickness_mm': th, 'pellet_diameter_mm': dia, 'measured_density_calc': meas, 'manual_theo_input': manual_theo, 'z_per_cell': z, 'unit_cell_vol': ucv_val, 'parsed_composition': comp_dbg, 'theoretical_debug': dbg})
 			except Exception as e:
 				st.write('デバッグ情報の取得に失敗しました:', e)
 		# update the numeric input field value visible in the form (relative_density_pct has no explicit key yet)
 		try:
-			# set session state so the number_input shows updated value on next rerun
-			st.session_state['relative_density_pct'] = float(rel) if rel is not None else st.session_state.get('relative_density_pct', st.session_state.get('relative_density_pct', 0.0))
+			st.session_state['relative_density_pct'] = float(rel) if rel is not None else st.session_state.get('relative_density_pct', 0.0)
 		except Exception:
 			pass
-		st.success(f"計算結果 — 実測密度: {meas or 'N/A'} g/cm^3, 理論密度: {theo or 'N/A'} g/cm^3, 相対密度: {rel or 'N/A'} %")
+		# final user message
+		if meas is None:
+			st.error('実測密度が計算できませんでした。ペレットの質量/厚さ/直径が正しく入力されているか確認してください。')
+		if theo is None:
+			st.error('理論密度が計算できませんでした。組成と格子体積を確認してください（または手動で理論密度を入力してください）。')
+		if rel is not None:
+			st.success(f"計算結果 — 実測密度: {meas:.6f} g/cm^3, 理論密度: {theo:.6f} g/cm^3, 相対密度: {rel:.3f} %")
+		else:
+			st.info('相対密度は計算されませんでした（実測密度か理論密度が不足しています）。')
 		# rerun so the form widget bound to 'relative_density_pct' refreshes and shows updated value
 		st.experimental_rerun()
 with compute_col2:
@@ -665,7 +775,7 @@ with compute_col2:
 		base_theo = None
 		try:
 			if ucv and ucv > 0:
-				base_theo = compute_theoretical_density(comp, ucv)
+				base_theo = compute_theoretical_density(comp, ucv, float(z))
 		except Exception:
 			base_theo = None
 		if base_theo is not None:
@@ -705,7 +815,7 @@ with compute_col2:
 			try:
 				dbg_comp = comp
 				ucv_dbg2 = float(ucv or 0)
-				dbg2 = compute_theoretical_density_debug(dbg_comp, ucv_dbg2) if ucv_dbg2 else {'composition': dbg_comp}
+				dbg2 = compute_theoretical_density_debug(dbg_comp, ucv_dbg2, float(z)) if ucv_dbg2 else {'composition': dbg_comp}
 				st.write(dbg2)
 			except Exception as e:
 				st.write('デバッグ情報の取得に失敗しました:', e)
@@ -742,7 +852,8 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 			comp_dbg = json.loads(st.session_state.get('composition_text') or '{}')
 		except Exception:
 			comp_dbg = {}
-		dbg = compute_theoretical_density_debug(comp_dbg, ucv_dbg) if ucv_dbg else {'composition': comp_dbg}
+		z_dbg = float(st.session_state.get('z_per_cell') or 1.0)
+		dbg = compute_theoretical_density_debug(comp_dbg, ucv_dbg, z_dbg) if ucv_dbg else {'composition': comp_dbg}
 		measured_vol = None
 		pmass = st.session_state.get('pellet_mass_g')
 		pth = st.session_state.get('pellet_thickness_mm')
@@ -840,10 +951,10 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 				except Exception:
 					ucv = None
 				if ucv:
-					base = compute_theoretical_density(sample.get('composition', {}), float(ucv))
 					z_val = safe_float(st.session_state.get('z_per_cell') or sample.get('z_per_cell') or 1.0)
+					base = compute_theoretical_density(sample.get('composition', {}), float(ucv), float(z_val))
 					if base is not None:
-						theoretical_density = base * float(z_val)
+						theoretical_density = base
 		except Exception:
 			theoretical_density = None
 
@@ -1363,9 +1474,9 @@ with colB:
 					ucv_val = None
 				base = None
 				if comp and ucv_val:
-					base = compute_theoretical_density(comp, ucv_val)
-				z = safe_float(s.get('z_per_cell') or 1.0)
-				theo = base * z if base is not None else None
+					z = safe_float(s.get('z_per_cell') or 1.0)
+					base = compute_theoretical_density(comp, ucv_val, float(z))
+					theo = base if base is not None else None
 				# measured density from pellet mass/thickness/diameter
 				pmass = safe_float(s.get('pellet_mass_g') or 0.0)
 				pth = safe_float(s.get('pellet_thickness_mm') or s.get('thickness_mm') or 0.0)
