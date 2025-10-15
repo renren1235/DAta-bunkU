@@ -114,8 +114,19 @@ def save_sample_local(sample: dict):
 
 
 def save_sample(sample: dict):
+	# Attempt to save to the selected storage. If Supabase is chosen but fails
+	# (missing env vars, network error, auth), automatically fall back to local
+	# sqlite storage so user actions (imports, form saves) do not silently fail.
 	if get_storage_mode() == 'supabase':
-		return supabase_save_sample(sample)
+		try:
+			return supabase_save_sample(sample)
+		except Exception as e:
+			# warn user and fall back to local storage
+			try:
+				st.warning(f"Supabase 保存に失敗したためローカル DB に保存します: {e}")
+			except Exception:
+				pass
+			return save_sample_local(sample)
 	else:
 		return save_sample_local(sample)
 
@@ -1061,6 +1072,8 @@ with colA:
 
 			if st.button("インポート実行"):
 				imported = 0
+				# flag to show one-time warning if O was auto-added for Ba/A-site perovskite rule
+				o_auto_added_any = False
 				errors = []
 				for idx, row in df_up.iterrows():
 					try:
@@ -1115,6 +1128,13 @@ with colA:
 										comp[e] = float(v)
 									except Exception:
 										pass
+						# Perovskite rule: if Ba or A present and O missing, add O=3.0 to allow correct theoretical density calc
+						try:
+							if isinstance(comp, dict) and ('O' not in comp) and (('Ba' in comp) or ('A' in comp)):
+								comp['O'] = 3.0
+								o_auto_added_any = True
+						except Exception:
+							pass
 						sample['composition'] = comp
 						sample['comp_normalized'] = normalize_composition(comp)
 						sample['element_numeric'] = element_numeric_fields(sample['comp_normalized'])
@@ -1128,37 +1148,185 @@ with colA:
 						except Exception:
 							pass
 
-						# resistances
+						# resistances: accept explicit selection, any R_### columns, numeric-temp column names, or a JSON 'resistances' cell
 						resistances = {}
-						for rc in resistance_cols:
+						# start with user-selected columns
+						res_cols = set(resistance_cols or [])
+						# auto-detect R_ prefixed or numeric temp headers
+						for c in df_up.columns:
+							if re.search(r"(^R_\d{3}\b)|(^\d{3}$)|\bR_?\d{3}\b", str(c)):
+								res_cols.add(c)
+						# if there's a 'resistances' column which may contain JSON, prefer to parse it
+						if 'resistances' in df_up.columns:
+							try:
+								cell = row['resistances']
+								if cell and not (pd.isna(cell)):
+									# if it's already a dict
+									if isinstance(cell, dict):
+										for k, v in cell.items():
+											try:
+												if isinstance(v, dict) and 'resistance_ohm' in v:
+													resistances[str(k)] = {'resistance_ohm': float(v['resistance_ohm'])}
+												else:
+													resistances[str(k)] = {'resistance_ohm': float(v)}
+											except Exception:
+												continue
+									# if it's a JSON string
+									elif isinstance(cell, str):
+										try:
+											j = json.loads(cell)
+											if isinstance(j, dict):
+												for k, v in j.items():
+														try:
+															if isinstance(v, dict) and 'resistance_ohm' in v:
+																resistances[str(k)] = {'resistance_ohm': float(v['resistance_ohm'])}
+															else:
+																resistances[str(k)] = {'resistance_ohm': float(v)}
+														except Exception:
+															continue
+										except Exception:
+											pass
+							except Exception:
+								pass
+						# parse other detected columns
+						for rc in sorted(res_cols):
 							try:
 								val = row[rc]
-								if pd.isna(val):
+								if pd.isna(val) or val in (None, ''):
 									continue
-								# attempt to parse temperature from column name like R_600 or 600K
-								import re
-								m = re.search(r"(\d{3})", rc)
+								m = re.search(r"(\d{3})", str(rc))
 								if m:
 									T = m.group(1)
 								else:
-									T = rc
-								resistances[str(T)] = {'resistance_ohm': float(val)}
+									T = str(rc)
+								try:
+									resistances[str(T)] = {'resistance_ohm': float(val)}
+								except Exception:
+									# if val is a dict-like string, try to parse numeric inside
+									try:
+										vj = json.loads(val) if isinstance(val, str) else None
+										if isinstance(vj, dict) and 'resistance_ohm' in vj:
+											resistances[str(T)] = {'resistance_ohm': float(vj['resistance_ohm'])}
+									except Exception:
+										pass
 							except Exception:
 								continue
 						sample['resistances'] = resistances
 
-						# other metadata best-effort
-						sample['synthesis_method'] = str(row.get('synthesis_method', '')) if 'synthesis_method' in df_up.columns else ''
-						sample['created_at'] = datetime.utcnow().isoformat()
+						# --- Map additional common columns into the sample dict to match Add/Update Sample form ---
+						# Lattice params
+						for key in ['a','a_err','b','b_err','c','c_err']:
+							if key in df_up.columns:
+								try:
+									sample[key] = float(row[key]) if row[key] not in (None, '', float('nan')) else None
+								except Exception:
+									sample[key] = row.get(key)
 
-						# save
-						save_sample(sample)
+						# unit cell volume
+						if 'unit_cell_volume' in df_up.columns:
+							try:
+								sample['unit_cell_volume'] = float(row['unit_cell_volume'])
+							except Exception:
+								sample['unit_cell_volume'] = row.get('unit_cell_volume')
+						if 'unit_cell_volume_err' in df_up.columns:
+							try:
+								sample['unit_cell_volume_err'] = float(row['unit_cell_volume_err'])
+							except Exception:
+								sample['unit_cell_volume_err'] = row.get('unit_cell_volume_err')
+
+						# calcination / atmosphere / relative density
+						for key in ['synthesis_method','calcination_temp_c','calcination_time_h','relative_density_pct','atmosphere']:
+							if key in df_up.columns:
+								try:
+									# cast numeric where appropriate
+									if key in ('calcination_temp_c','calcination_time_h','relative_density_pct'):
+										sample[key] = float(row[key])
+									else:
+										sample[key] = str(row[key])
+								except Exception:
+									sample[key] = row.get(key)
+
+						# also accept common Japanese/alternative column names for synthesis method and crystal system
+						cols_norm = {c.lower().replace(' ','').replace('_',''): c for c in df_up.columns}
+						# synthesis method synonyms
+						for syn in ['synthesismethod','synthesismethod','合成方法','method']:
+							if syn in cols_norm and not sample.get('synthesis_method'):
+								try:
+									sample['synthesis_method'] = str(row[cols_norm[syn]])
+								except Exception:
+									pass
+						# crystal system synonyms
+						for syn in ['crystalsystem','crystal_system','結晶系','晶系']:
+							if syn in cols_norm and not sample.get('crystal_system'):
+								try:
+									sample['crystal_system'] = str(row[cols_norm[syn]])
+								except Exception:
+									pass
+
+						# pellet geometry and mass
+						for key in ['pellet_mass_g','pellet_thickness_mm','pellet_diameter_mm','thickness_mm','electrode_diameter_mm']:
+							if key in df_up.columns:
+								try:
+									sample[key] = float(row[key])
+								except Exception:
+									sample[key] = row.get(key)
+
+						# z per cell
+						if 'z_per_cell' in df_up.columns:
+							try:
+								sample['z_per_cell'] = float(row['z_per_cell'])
+							except Exception:
+								sample['z_per_cell'] = row.get('z_per_cell')
+
+						# element columns: support both capitalized symbols and lowercase names
+						for el in ['Ba','Zr','Ce','Y','Yb','Zn','Ni','Co','Fe','O','Ba2+','A']:
+							if el in df_up.columns:
+								try:
+									sample[el] = float(row[el])
+								except Exception:
+									sample[el] = row.get(el)
+						# also lowercase keys
+						cols_lower = {c.lower(): c for c in df_up.columns}
+						for el in ['ba','zr','ce','y','yb','zn','ni','co','fe','o']:
+							if el in cols_lower:
+								c = cols_lower[el]
+								try:
+									sample[el] = float(row[c])
+								except Exception:
+									sample[el] = row.get(c)
+
+						# created_at override if provided (accept string values)
+						if 'created_at' in df_up.columns:
+							try:
+								sample['created_at'] = str(row['created_at'])
+							except Exception:
+								pass
+
+						# fallback: ensure synthesis_method exists
+						sample['synthesis_method'] = sample.get('synthesis_method') or (str(row.get('synthesis_method','')) if 'synthesis_method' in df_up.columns else '')
+						# ensure metadata and created_at
+						sample['meta'] = sample.get('meta', {})
+						sample['meta']['imported_from'] = fname
+						if 'created_at' not in sample or not sample.get('created_at'):
+							sample['created_at'] = datetime.utcnow().isoformat()
+						# save with fallback: prefer configured storage, but if it fails, save local
+						try:
+							save_sample(sample)
+						except Exception as e:
+							# fallback to local storage if supabase not configured or save fails
+							try:
+								save_sample_local(sample)
+								st.warning(f"保存方法に問題があったためローカルに保存しました: {e}")
+							except Exception as e2:
+								errors.append(str(e2))
 						imported += 1
 					except Exception as e:
 						errors.append(str(e))
 				st.success(f"インポート完了: {imported} 件")
 				if errors:
 					st.error(f"一部エラーが発生しました: {errors[:5]}")
+				if o_auto_added_any:
+					st.warning("注意: Ba または A が検出され、酸素が欠落していたため自動的に O=3.0 を追加しました。必要に応じて編集してください。")
 				st.rerun()
 with colB:
 	# allow multiple selection of samples; show friendly labels (sample_no + short id)
