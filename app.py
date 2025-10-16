@@ -449,6 +449,10 @@ with st.form("sample_form", clear_on_submit=False):
 			st.session_state['pellet_thickness_mm'] = editing.get('pellet_thickness_mm') or editing.get('thickness_mm') or st.session_state.get('pellet_thickness_mm', 1.0)
 			st.session_state['pellet_diameter_mm'] = editing.get('pellet_diameter_mm') or editing.get('electrode_diameter_mm') or st.session_state.get('pellet_diameter_mm', 10.0)
 			st.session_state['z_per_cell'] = editing.get('z_per_cell') or st.session_state.get('z_per_cell') or 1.0
+			# Prefill synthesis/calcination fields for editing
+			st.session_state['synthesis_method'] = editing.get('synthesis_method') or st.session_state.get('synthesis_method', '')
+			st.session_state['calcination_temp_c'] = editing.get('calcination_temp_c') if editing.get('calcination_temp_c') is not None else st.session_state.get('calcination_temp_c', 1200)
+			st.session_state['calcination_time_h'] = editing.get('calcination_time_h') if editing.get('calcination_time_h') is not None else st.session_state.get('calcination_time_h', 10.0)
 			st.session_state['computed_measured_density'] = editing.get('measured_density_g_cm3') or st.session_state.get('computed_measured_density')
 			st.session_state['computed_theoretical_density'] = editing.get('theoretical_density_g_cm3') or st.session_state.get('computed_theoretical_density')
 			st.session_state['computed_relative_density'] = editing.get('relative_density_pct') or st.session_state.get('computed_relative_density')
@@ -459,9 +463,10 @@ with st.form("sample_form", clear_on_submit=False):
 
 	col1, col2 = st.columns(2)
 	with col1:
-		synthesis_method = st.text_input("合成方法")
-		calcination_temp_c = st.number_input("焼成温度 (℃)", value=1200)
-		calcination_time_h = st.number_input("焼成時間 (h)", value=10.0, format="%.2f")
+		# Use session_state-backed defaults so editing loads values reliably
+		synthesis_method = st.text_input("合成方法", value=st.session_state.get('synthesis_method', ''), key='synthesis_method')
+		calcination_temp_c = st.number_input("焼成温度 (℃)", value=safe_float(st.session_state.get('calcination_temp_c', 1200)), key='calcination_temp_c')
+		calcination_time_h = st.number_input("焼成時間 (h)", value=safe_float(st.session_state.get('calcination_time_h', 10.0)), format="%.2f", key='calcination_time_h')
 		# crystal system selection (common choices) with option to enter custom text
 		crystal_choices = ["(未指定)", "立方晶 (Cubic)", "正方晶 (Tetragonal)", "六方晶 (Hexagonal)", "直方晶 (Orthorhombic)", "単斜晶 (Monoclinic)", "三斜晶 (Triclinic)", "菱面体 (Rhombohedral)"]
 		crystal_system_sel = st.selectbox("結晶系", options=crystal_choices, index=0)
@@ -984,10 +989,9 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 			sample['measured_density_g_cm3'] = measured_density
 		else:
 			sample.pop('measured_density_g_cm3', None)
+		# If we can compute both theoretical and measured densities, overwrite relative_density_pct
 		if theoretical_density is not None and measured_density is not None:
 			sample['relative_density_pct'] = (measured_density / theoretical_density) * 100.0
-		elif 'relative_density_pct' in sample:
-			sample.pop('relative_density_pct', None)
 
 		# attach resistances and numeric element fields
 		for T, v in resistance_inputs.items():
@@ -1020,6 +1024,29 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 
 		sid = save_sample(sample)
 		st.success(f"保存しました: id={sid}")
+		# clear editing state and reset some form-backed session_state keys to defaults
+		st.session_state['editing_sample'] = None
+		st.session_state.pop('editing_loaded_id', None)
+		# reset common form session keys to sensible defaults so next new form is clean
+		for k, v in {
+			'composition_text': '',
+			'unit_cell_vol': '',
+			'unit_cell_vol_err': '',
+			'pellet_mass_g': 0.0,
+			'pellet_thickness_mm': 1.0,
+			'pellet_diameter_mm': 10.0,
+			'z_per_cell': 1.0,
+			'theoretical_density_input': 0.0,
+			'measured_density_display_value': None,
+			'theoretical_density_display_value': None,
+			'relative_density_display_value': None,
+			'relative_density_pct': 95.0,
+			'synthesis_method': '',
+			'calcination_temp_c': 1200,
+			'calcination_time_h': 10.0,
+			'atmosphere': 'Air'
+		}.items():
+			st.session_state[k] = v
 		# refresh the app so the new sample appears in the list immediately
 		st.rerun()
 
@@ -1135,6 +1162,8 @@ with colA:
 				# find full sample object and load into form for editing
 				s = next((x for x in samples if x.get('id') == row.get('id')), None)
 				if s:
+					# ensure form reloads fresh values
+					st.session_state.pop('editing_loaded_id', None)
 					st.session_state['editing_sample'] = s
 					st.rerun()
 			if rcols[4].button("削除", key=del_key):
