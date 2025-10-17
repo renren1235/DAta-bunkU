@@ -1579,11 +1579,15 @@ with colB:
 		elif not rows_out and export_target == "全サンプル":
 			st.warning("エクスポート対象のデータがありません。")
 		else:
-			df_out = pd.DataFrame(rows_out)
-			if chosen_fields:
-				df_out = df_out[chosen_fields]
-			csv = df_out.to_csv(index=False)
-			st.download_button("ダウンロード CSV", csv, file_name="export_selected.csv", mime="text/csv")
+				df_out = pd.DataFrame(rows_out)
+				# defensive: ensure sample_no column is always present in exports
+				if 'sample_no' not in df_out.columns:
+					# rows_out preserves original order; fill sample_no from rows_out dicts
+					df_out.insert(0, 'sample_no', [r.get('sample_no', '') for r in rows_out])
+				if chosen_fields:
+					df_out = df_out[chosen_fields]
+				csv = df_out.to_csv(index=False)
+				st.download_button("ダウンロード CSV", csv, file_name="export_selected.csv", mime="text/csv")
 
 	if st.button("エクスポート（XLSX）"):
 		if export_target == "選択サンプル":
@@ -1596,11 +1600,14 @@ with colB:
 		elif not rows_out and export_target == "全サンプル":
 			st.warning("エクスポート対象のデータがありません。")
 		else:
-			df_out = pd.DataFrame(rows_out)
-			if chosen_fields:
-				df_out = df_out[chosen_fields]
-			xlsx_bytes = excel_bytes_from_df(df_out)
-			st.download_button("ダウンロード XLSX", xlsx_bytes, file_name="export_selected.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+				df_out = pd.DataFrame(rows_out)
+				# defensive: ensure sample_no column is always present in exports
+				if 'sample_no' not in df_out.columns:
+					df_out.insert(0, 'sample_no', [r.get('sample_no', '') for r in rows_out])
+				if chosen_fields:
+					df_out = df_out[chosen_fields]
+				xlsx_bytes = excel_bytes_from_df(df_out)
+				st.download_button("ダウンロード XLSX", xlsx_bytes, file_name="export_selected.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 	# show details for each selected sample with edit/delete controls
 	if selected_ids:
