@@ -1031,6 +1031,18 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 		st.session_state['editing_sample'] = None
 		st.session_state.pop('editing_loaded_id', None)
 		# reset common form session keys to sensible defaults so next new form is clean
+		# helper to set session_state keys safely (some contexts can raise StreamlitAPIException)
+		def _safe_set_session(key, val):
+			try:
+				st.session_state[key] = val
+			except Exception as _ex:
+				# log to UI (non-fatal) so deploy logs capture the issue without crashing the app
+				try:
+					st.warning(f"session_state set failed for {key}: {_ex}")
+				except Exception:
+					# last resort: print to stdout (Streamlit will capture logs)
+					print(f"session_state set failed for {key}: {_ex}")
+
 		for k, v in {
 			'composition_text': '',
 			'unit_cell_vol': '',
@@ -1049,7 +1061,7 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 			'calcination_time_h': 10.0,
 			'atmosphere': 'Air'
 		}.items():
-			st.session_state[k] = v
+			_safe_set_session(k, v)
 		# refresh the app so the new sample appears in the list immediately
 		st.rerun()
 
