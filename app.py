@@ -1218,6 +1218,11 @@ with colA:
 				# flag to show one-time warning if O was auto-added for Ba/A-site perovskite rule
 				o_auto_added_any = False
 				errors = []
+				# quick debug: show number of rows and mapping choices
+				try:
+					st.info(f"インポート開始: {len(df_up)} 行 (sample_no col: {map_sample_no}, composition col: {map_composition})")
+				except Exception:
+					pass
 				for idx, row in df_up.iterrows():
 					try:
 						sample = {}
@@ -1453,18 +1458,24 @@ with colA:
 						if 'created_at' not in sample or not sample.get('created_at'):
 							sample['created_at'] = datetime.utcnow().isoformat()
 						# save with fallback: prefer configured storage, but if it fails, save local
+						saved = False
 						try:
+							# try configured storage
 							save_sample(sample)
+							saved = True
 						except Exception as e:
-							# fallback to local storage if supabase not configured or save fails
+							# try local fallback and surface the original error
 							try:
 								save_sample_local(sample)
+								saved = True
 								st.warning(f"保存方法に問題があったためローカルに保存しました: {e}")
 							except Exception as e2:
-								errors.append(str(e2))
-						imported += 1
+								errors.append(f"行 {idx}: supabase error: {e}; local fallback error: {e2}")
+						# increment only when saved
+						if saved:
+							imported += 1
 					except Exception as e:
-						errors.append(str(e))
+						errors.append(f"行 {idx}: {e}")
 				st.success(f"インポート完了: {imported} 件")
 				if errors:
 					st.error(f"一部エラーが発生しました: {errors[:5]}")
