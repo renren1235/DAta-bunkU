@@ -449,6 +449,8 @@ with st.form("sample_form", clear_on_submit=False):
 			st.session_state['pellet_thickness_mm'] = editing.get('pellet_thickness_mm') or editing.get('thickness_mm') or st.session_state.get('pellet_thickness_mm', 1.0)
 			st.session_state['pellet_diameter_mm'] = editing.get('pellet_diameter_mm') or editing.get('electrode_diameter_mm') or st.session_state.get('pellet_diameter_mm', 10.0)
 			st.session_state['z_per_cell'] = editing.get('z_per_cell') or st.session_state.get('z_per_cell') or 1.0
+			# ensure sample_no is available in session_state so the text_input reflects it
+			st.session_state['sample_no'] = editing.get('sample_no', '')
 			# Prefill synthesis/calcination fields for editing
 			st.session_state['synthesis_method'] = editing.get('synthesis_method') or st.session_state.get('synthesis_method', '')
 			st.session_state['calcination_temp_c'] = editing.get('calcination_temp_c') if editing.get('calcination_temp_c') is not None else st.session_state.get('calcination_temp_c', 1200)
@@ -459,7 +461,8 @@ with st.form("sample_form", clear_on_submit=False):
 			st.session_state['theoretical_density_input'] = editing.get('theoretical_density_g_cm3') or st.session_state.get('theoretical_density_input', 0.0)
 			st.session_state['relative_density_pct'] = editing.get('relative_density_pct') or st.session_state.get('relative_density_pct', 0.0)
 
-	sample_no = st.text_input("試料No.", value=(editing.get('sample_no', "")))
+	# sample_no is session_state-backed so edits update reliably
+	sample_no = st.text_input("試料No.", value=st.session_state.get('sample_no', ''), key='sample_no')
 
 	col1, col2 = st.columns(2)
 	with col1:
@@ -1592,6 +1595,8 @@ with colB:
 						st.rerun()
 				with cedit:
 					if st.button("編集", key=f"edit_{sid}"):
+						# ensure form reloads fresh values for this edit
+						st.session_state.pop('editing_loaded_id', None)
 						st.session_state['editing_sample'] = s
 						st.rerun()
 
