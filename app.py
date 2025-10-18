@@ -1343,18 +1343,46 @@ with colA:
 									pass
 
 						# pellet geometry and mass
-						for key in [
-							'pellet_mass_g','pellet_thickness_mm','pellet_diameter_mm','thickness_mm','electrode_diameter_mm',
-							'measured_density_g_cm3','theoretical_density_g_cm3','relative_density_pct',
-							'sample_no','synthesis_method','calcination_temp_c','calcination_time_h','atmosphere',
-							'unit_cell_volume','unit_cell_volume_err','z_per_cell',
-							'a','a_err','b','b_err','c','c_err','crystal_system'
-						]:
-							if key in df_up.columns:
-								try:
-									sample[key] = float(row[key]) if key not in ['sample_no','synthesis_method','atmosphere','crystal_system'] else str(row[key])
-								except Exception:
-									sample[key] = row.get(key)
+						# --- Flexible mapping for all form fields (Japanese/English/synonyms) ---
+						import_map = {
+							'synthesis_method': ['synthesis_method','合成方法','method'],
+							'calcination_temp_c': ['calcination_temp_c','焼成温度','calcination_temp','temp_c'],
+							'calcination_time_h': ['calcination_time_h','焼成時間','calcination_time','time_h'],
+							'crystal_system': ['crystal_system','結晶系','晶系'],
+							'a': ['a','a(Å)','a_angs','a_axis'],
+							'a_err': ['a_err','aエラー','a_error'],
+							'b': ['b','b(Å)','b_angs','b_axis'],
+							'b_err': ['b_err','bエラー','b_error'],
+							'c': ['c','c(Å)','c_angs','c_axis'],
+							'c_err': ['c_err','cエラー','c_error'],
+							'unit_cell_volume': ['unit_cell_volume','格子体積','cell_vol','volume'],
+							'unit_cell_volume_err': ['unit_cell_volume_err','格子体積エラー','cell_vol_err','volume_err'],
+							'atmosphere': ['atmosphere','測定雰囲気','雰囲気'],
+							'pellet_mass_g': ['pellet_mass_g','ペレット質量','mass_g'],
+							'pellet_thickness_mm': ['pellet_thickness_mm','ペレット厚さ','thickness_mm'],
+							'pellet_diameter_mm': ['pellet_diameter_mm','ペレット直径','diameter_mm'],
+							'thickness_mm': ['thickness_mm','試料厚さ'],
+							'electrode_diameter_mm': ['electrode_diameter_mm','電極直径'],
+							'measured_density_g_cm3': ['measured_density_g_cm3','実測密度','measured_density'],
+							'theoretical_density_g_cm3': ['theoretical_density_g_cm3','理論密度','theoretical_density'],
+							'relative_density_pct': ['relative_density_pct','相対密度','relative_density'],
+							'sample_no': ['sample_no','試料No.','サンプルNo','no']
+						}
+						cols_norm = {c.lower().replace(' ','').replace('_',''): c for c in df_up.columns}
+						for key, cands in import_map.items():
+							for cand in cands:
+								cand_norm = cand.lower().replace(' ','').replace('_','')
+								if cand_norm in cols_norm:
+									cname = cols_norm[cand_norm]
+									try:
+										# string fields
+										if key in ['sample_no','synthesis_method','atmosphere','crystal_system']:
+											sample[key] = str(row[cname])
+										else:
+											sample[key] = float(row[cname])
+									except Exception:
+										sample[key] = row.get(cname)
+									break
 
 						# auto-map synonyms if explicit columns absent
 						try:
