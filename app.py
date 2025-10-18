@@ -1541,6 +1541,32 @@ with colA:
 								except Exception:
 									sample[key] = row.get(key)
 
+						# auto-map synonyms if explicit columns absent
+						try:
+							# pellet_mass_g
+							if 'pellet_mass_g' not in sample:
+								cols_norm = {c.lower().replace(' ','').replace('_',''): c for c in df_up.columns}
+								for cand in ['pelletmassg','massg','mass','質量','ペレット質量']:
+									if cand in cols_norm:
+										cname = cols_norm[cand]
+										try:
+											sample['pellet_mass_g'] = float(row[cname])
+										except Exception:
+											sample['pellet_mass_g'] = row.get(cname)
+										break
+							# z_per_cell
+							if 'z_per_cell' not in sample:
+								for cand in ['zpercell','z','式数']:
+									if cand in cols_norm:
+										cname = cols_norm[cand]
+										try:
+											sample['z_per_cell'] = float(row[cname])
+										except Exception:
+											sample['z_per_cell'] = row.get(cname)
+										break
+						except Exception:
+							pass
+
 						# z per cell
 						if 'z_per_cell' in df_up.columns:
 							try:
@@ -1754,15 +1780,22 @@ if not selected_ids:
 	st.info("左のパネルからサンプルを選択してください。複数選択可。")
 else:
 	# collect arrhenius points for each selected sample
+	skipped = []
 	combined_rows = []
 	for sid in selected_ids:
 		s = next((x for x in samples if x.get('id') == sid), None)
 		if not s:
 			continue
-		thickness_mm = s.get('thickness_mm')
-		electrode_diameter_mm = s.get('electrode_diameter_mm')
-		resistances = s.get('resistances', {})
+		# try primary geometry then fallback to pellet geometry
+		thickness_mm = s.get('thickness_mm') or s.get('pellet_thickness_mm')
+		electrode_diameter_mm = s.get('electrode_diameter_mm') or s.get('pellet_diameter_mm')
+		resistances = s.get('resistances', {}) or {}
 		rows = []
+		reason = []
+		if not thickness_mm or not electrode_diameter_mm:
+			reason.append('geometry')
+		if not resistances:
+			reason.append('no R')
 		for T_str, rinfo in resistances.items():
 			try:
 				T_c = float(T_str)
@@ -1777,9 +1810,15 @@ else:
 			arr_pts = make_arrhenius_points(rows)
 			for p in arr_pts:
 				combined_rows.append({'sample_id': sid, 'sample_no': s.get('sample_no'), '1000/T': p[0], 'ln(sigma*T)': p[1]})
+		else:
+			nm = s.get('sample_no') or (s.get('id') or '')[:8]
+			skipped.append(f"{nm}({'+'.join(reason) if reason else 'calc failed'})")
 
 	if not combined_rows:
-		st.info("選択サンプルに導電率データがありません。フォームで抵抗値を入力してください。")
+		msg = "選択サンプルに導電率データがありません。フォームで抵抗値と幾何を入力してください。"
+		if skipped:
+			msg += f"（スキップ: {', '.join(skipped[:5])} など）"
+		st.info(msg)
 	else:
 		arr_df = pd.DataFrame(combined_rows)
 		st.dataframe(arr_df)
@@ -1843,8 +1882,9 @@ else:
 			s = next((x for x in samples if x.get('id') == sid), None)
 			if not s:
 				continue
-			thickness_mm = s.get('thickness_mm') or s.get('thickness_mm')
-			electrode_diameter_mm = s.get('electrode_diameter_mm') or s.get('electrode_diameter_mm')
+			# fall back to pellet geometry if main geometry is missing
+			thickness_mm = s.get('thickness_mm') or s.get('pellet_thickness_mm')
+			electrode_diameter_mm = s.get('electrode_diameter_mm') or s.get('pellet_diameter_mm')
 			resistances = s.get('resistances', {})
 			for T_str, rinfo in resistances.items():
 				try:
