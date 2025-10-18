@@ -1372,7 +1372,7 @@ with colA:
 						sample['comp_normalized'] = normalize_composition(comp)
 						sample['element_numeric'] = element_numeric_fields(sample['comp_normalized'])
 
-						# thickness/electrode (manual mapping or auto by synonyms)
+						# thickness/electrode/pellet geometry (manual mapping or auto by synonyms)
 						try:
 							if not auto_map_all:
 								if map_thickness != '(なし)':
@@ -1380,12 +1380,17 @@ with colA:
 								if map_electrode != '(なし)':
 									sample['electrode_diameter_mm'] = float(row[map_electrode])
 							else:
-								ct = find_col(['thickness_mm','pellet_thickness_mm','厚さ'])
-								ce = find_col(['electrode_diameter_mm','pellet_diameter_mm','電極直径','ペレット直径'])
+								ct = find_col(['pellet_thickness_mm','thickness_mm','厚さ','ペレット厚さ','ペレット厚み'])
+								ce_elec = find_col(['electrode_diameter_mm','電極直径'])
+								ce_pellet = find_col(['pellet_diameter_mm','ペレット直径','ペレット径'])
 								if ct:
+									# store to both pellet_thickness_mm and thickness_mm for compatibility
+									sample['pellet_thickness_mm'] = float(row[ct])
 									sample['thickness_mm'] = float(row[ct])
-								if ce:
-									sample['electrode_diameter_mm'] = float(row[ce])
+								if ce_elec:
+									sample['electrode_diameter_mm'] = float(row[ce_elec])
+								if ce_pellet:
+									sample['pellet_diameter_mm'] = float(row[ce_pellet])
 						except Exception:
 							pass
 
@@ -1474,6 +1479,24 @@ with colA:
 								sample['unit_cell_volume_err'] = float(row['unit_cell_volume_err'])
 							except Exception:
 								sample['unit_cell_volume_err'] = row.get('unit_cell_volume_err')
+
+						# density fields (theoretical, measured, relative) via common synonyms
+						try:
+							dens_map = {
+								'theoretical_density_g_cm3': ['theoretical_density_g_cm3','theoretical_density','density_theoretical','理論密度','理論密度(g/cm3)','理論密度(g/cm^3)'],
+								'measured_density_g_cm3': ['measured_density_g_cm3','measured_density','density_measured','実測密度','実密度'],
+								'relative_density_pct': ['relative_density_pct','relative_density','相対密度','相対密度(%)']
+							}
+							for target, cands in dens_map.items():
+								cname = find_col(cands)
+								if cname:
+									try:
+										sample[target] = float(row[cname])
+									except Exception:
+										# leave as is if non-numeric
+										pass
+						except Exception:
+							pass
 
 						# calcination / atmosphere / relative density
 						for key in ['synthesis_method','calcination_temp_c','calcination_time_h','relative_density_pct','atmosphere']:
