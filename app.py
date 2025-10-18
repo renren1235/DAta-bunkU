@@ -1106,7 +1106,6 @@ with colA:
 				except Exception:
 					pass
 
-				# helpers for auto-mapping
 				import re
 				norm_cols = {c.lower().replace(' ','').replace('_',''): c for c in df_up.columns}
 				def find_col(candidates):
@@ -1115,6 +1114,39 @@ with colA:
 						if key in norm_cols:
 							return norm_cols[key]
 					return None
+
+				# --- 強化: 主要フィールドの自動マッピング候補リスト ---
+				field_map_candidates = {
+					'crystal_system': ['crystalsystem','crystal_system','結晶系'],
+					'a': ['a','lattice_a','a(å)','a(ang)','格子定数a'],
+					'a_err': ['a_err','aerror','a±','a誤差'],
+					'b': ['b','lattice_b','b(å)','b(ang)','格子定数b'],
+					'b_err': ['b_err','berror','b±','b誤差'],
+					'c': ['c','lattice_c','c(å)','c(ang)','格子定数c'],
+					'c_err': ['c_err','cerror','c±','c誤差'],
+					'unit_cell_volume': ['unit_cell_volume','ucv','v(å^3)','cellvolume','格子体積'],
+					'unit_cell_volume_err': ['unit_cell_volume_err','ucv_err','v_err','cellvolume_err','格子体積誤差'],
+					'theoretical_density_g_cm3': ['theoretical_density_g_cm3','theoreticaldensity','理論密度'],
+					'measured_density_g_cm3': ['measured_density_g_cm3','measureddensity','実測密度'],
+					'relative_density_pct': ['relative_density_pct','relativedensity','相対密度'],
+					'atmosphere': ['atmosphere','環境','雰囲気'],
+					'calcination_temp_c': ['calcination_temp_c','calcinationtemp','焼成温度'],
+					'calcination_time_h': ['calcination_time_h','calcinationtime','焼成時間'],
+					'pellet_mass_g': ['pellet_mass_g','massg','mass','質量','ペレット質量'],
+					'pellet_thickness_mm': ['pellet_thickness_mm','thickness_mm','厚さ','ペレット厚さ','ペレット厚み'],
+					'pellet_diameter_mm': ['pellet_diameter_mm','electrode_diameter_mm','ペレット直径','ペレット径','電極直径'],
+					'z_per_cell': ['z_per_cell','zpercell','z','式数'],
+					# エレメント
+					'ba': ['ba','Ba','Ba2+'],
+					'zr': ['zr','Zr'],
+					'ce': ['ce','Ce'],
+					'y': ['y','Y'],
+					'yb': ['yb','Yb'],
+					'zn': ['zn','Zn'],
+					'ni': ['ni','Ni'],
+					'co': ['co','Co'],
+					'fe': ['fe','Fe'],
+				}
 				for idx, row in df_up.iterrows():
 					try:
 						sample = {}
@@ -1218,25 +1250,16 @@ with colA:
 						sample['comp_normalized'] = normalize_composition(comp)
 						sample['element_numeric'] = element_numeric_fields(sample['comp_normalized'])
 
-						# thickness/electrode/pellet geometry (manual mapping or auto by synonyms)
+
+						# --- 強化: 主要フィールドの自動マッピング ---
 						try:
-							if not auto_map_all:
-								if map_thickness != '(なし)':
-									sample['thickness_mm'] = float(row[map_thickness])
-								if map_electrode != '(なし)':
-									sample['electrode_diameter_mm'] = float(row[map_electrode])
-							else:
-								ct = find_col(['pellet_thickness_mm','thickness_mm','厚さ','ペレット厚さ','ペレット厚み'])
-								ce_elec = find_col(['electrode_diameter_mm','電極直径'])
-								ce_pellet = find_col(['pellet_diameter_mm','ペレット直径','ペレット径'])
-								if ct:
-									# store to both pellet_thickness_mm and thickness_mm for compatibility
-									sample['pellet_thickness_mm'] = float(row[ct])
-									sample['thickness_mm'] = float(row[ct])
-								if ce_elec:
-									sample['electrode_diameter_mm'] = float(row[ce_elec])
-								if ce_pellet:
-									sample['pellet_diameter_mm'] = float(row[ce_pellet])
+							for field, candidates in field_map_candidates.items():
+								col = find_col(candidates)
+								if col is not None and not pd.isna(row[col]):
+									try:
+										sample[field] = float(row[col]) if isinstance(row[col], (int, float, str)) and str(row[col]).replace('.','',1).isdigit() else row[col]
+									except Exception:
+										sample[field] = row[col]
 						except Exception:
 							pass
 
