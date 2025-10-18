@@ -885,7 +885,18 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 				measured_vol = math.pi * (d_cm / 2.0) ** 2 * th_cm
 		except Exception:
 			measured_vol = None
-		st.write({**dbg, 'measured_volume_cm3': measured_vol, 'measured_mass_g': pmass})
+		# Display comprehensive debug info
+		st.json({
+			'composition': dbg.get('composition'),
+			'mass_per_formula': dbg.get('mass_per_formula'),
+			'v_cm3': dbg.get('v_cm3'),
+			'NA': dbg.get('NA'),
+			'z_per_cell': z_dbg,
+			'base_per_formula': dbg.get('base_per_formula'),
+			'final_density': dbg.get('final_density'),
+			'measured_volume_cm3': measured_vol,
+			'measured_mass_g': pmass
+		})
 	except Exception as e:
 		st.write('デバッグ表示エラー:', e)
 
@@ -1605,6 +1616,51 @@ with colA:
 						sample['meta']['imported_from'] = fname
 						if 'created_at' not in sample or not sample.get('created_at'):
 							sample['created_at'] = datetime.utcnow().isoformat()
+						
+						# Auto-calculate densities if fields present (but not already in row)
+						try:
+							# Theoretical density: if composition + unit_cell_volume + z exist and not already imported
+							if 'theoretical_density_g_cm3' not in sample or sample.get('theoretical_density_g_cm3') is None:
+								comp_auto = sample.get('composition') or {}
+								ucv_auto = sample.get('unit_cell_volume')
+								z_auto = sample.get('z_per_cell') or 1.0
+								if comp_auto and ucv_auto:
+									try:
+										theo_calc = compute_theoretical_density(comp_auto, float(ucv_auto), float(z_auto))
+										if theo_calc is not None:
+											sample['theoretical_density_g_cm3'] = theo_calc
+									except Exception:
+										pass
+							
+							# Measured density: if pellet mass + thickness + diameter exist and not already imported
+							if 'measured_density_g_cm3' not in sample or sample.get('measured_density_g_cm3') is None:
+								pmass_auto = sample.get('pellet_mass_g')
+								pth_auto = sample.get('pellet_thickness_mm') or sample.get('thickness_mm')
+								pdia_auto = sample.get('pellet_diameter_mm') or sample.get('electrode_diameter_mm')
+								if pmass_auto and pth_auto and pdia_auto:
+									try:
+										th_cm_auto = float(pth_auto) / 10.0
+										d_cm_auto = float(pdia_auto) / 10.0
+										vol_cm3_auto = math.pi * (d_cm_auto / 2.0) ** 2 * th_cm_auto
+										if vol_cm3_auto > 0:
+											meas_calc = float(pmass_auto) / vol_cm3_auto
+											sample['measured_density_g_cm3'] = meas_calc
+									except Exception:
+										pass
+							
+							# Relative density: if both theoretical and measured exist and not already imported
+							if 'relative_density_pct' not in sample or sample.get('relative_density_pct') is None:
+								theo_f = sample.get('theoretical_density_g_cm3')
+								meas_f = sample.get('measured_density_g_cm3')
+								if theo_f and meas_f and float(theo_f) > 0:
+									try:
+										rel_calc = (float(meas_f) / float(theo_f)) * 100.0
+										sample['relative_density_pct'] = rel_calc
+									except Exception:
+										pass
+						except Exception:
+							pass
+						
 						# save with fallback: prefer configured storage, but if it fails, save local
 						saved = False
 						try:
