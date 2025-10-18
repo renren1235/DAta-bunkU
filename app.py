@@ -1,173 +1,18 @@
-# empty
-
 import os
-import streamlit as st
-import pandas as pd
 import json
 import uuid
 import sqlite3
 import math
-import requests
-from datetime import datetime
-from typing import Dict, Any
 from io import BytesIO
-
+from datetime import datetime
+from typing import Dict, Any, List
+import streamlit as st
+import pandas as pd
 from utils import calculate_sigma, make_arrhenius_points, normalize_composition, element_numeric_fields
 
-DB_PATH = "samples.db"
-PRESET_PATH = "presets.json"
-
-
-def get_storage_mode() -> str:
-	# storage mode is stored in session state by sidebar control
-	return st.session_state.get("storage_mode", "local")
-
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
-
-def supabase_headers():
-	return {
-		"apikey": SUPABASE_KEY or "",
-		"Authorization": f"Bearer {SUPABASE_KEY}" if SUPABASE_KEY else "",
-		"Content-Type": "application/json",
-	}
-
-
-def supabase_save_sample(sample: dict) -> str:
-	if not SUPABASE_URL or not SUPABASE_KEY:
-		raise RuntimeError("SUPABASE_URL or SUPABASE_KEY not set")
-	url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/samples"
-	headers = supabase_headers()
-	# If id exists, try PATCH (update). Otherwise POST (insert)
-	sid = sample.get("id")
-	payload = {"sample_no": sample.get("sample_no"), "data": sample}
-	if sid:
-		# PATCH where id=eq.sid
-		resp = requests.patch(f"{url}?id=eq.{sid}", headers={**headers, "Prefer": "return=representation"}, data=json.dumps(payload))
-		if resp.ok:
-			return sid
-		# fallback to POST
-	resp = requests.post(url, headers={**headers, "Prefer": "return=representation"}, data=json.dumps(payload))
-	if resp.ok:
-		body = resp.json()
-		# try to extract id
-		return str(body[0].get("id")) if isinstance(body, list) and body else sid or ""
-	else:
-		raise RuntimeError(f"Supabase save error: {resp.status_code} {resp.text}")
-
-
-def supabase_load_all_samples():
-	if not SUPABASE_URL or not SUPABASE_KEY:
-		raise RuntimeError("SUPABASE_URL or SUPABASE_KEY not set")
-	url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/samples"
-	headers = supabase_headers()
-	params = {"select": "id,sample_no,data,created_at", "order": "created_at.desc"}
-	resp = requests.get(url, headers=headers, params=params)
-	if resp.ok:
-		rows = resp.json()
-		samples = []
-		for r in rows:
-			data = r.get("data") or {}
-			samples.append({"id": r.get("id"), "sample_no": r.get("sample_no"), "created_at": r.get("created_at"), **data})
-		return samples
-	else:
-		raise RuntimeError(f"Supabase fetch error: {resp.status_code} {resp.text}")
-
-
-def supabase_delete_sample(sample_id: str):
-	if not SUPABASE_URL or not SUPABASE_KEY:
-		raise RuntimeError("SUPABASE_URL or SUPABASE_KEY not set")
-	url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/samples?id=eq.{sample_id}"
-	headers = supabase_headers()
-	resp = requests.delete(url, headers=headers)
-	if not resp.ok:
-		raise RuntimeError(f"Supabase delete error: {resp.status_code} {resp.text}")
-
-
-def init_db():
-	conn = get_db_connection()
-	cur = conn.cursor()
-	cur.execute("""
-	CREATE TABLE IF NOT EXISTS samples (
-		id TEXT PRIMARY KEY,
-		sample_no TEXT,
-		created_at TEXT,
-		data_json TEXT
-	)
-	""")
-	conn.commit()
-	conn.close()
-
-
-def save_sample_local(sample: dict):
-	conn = get_db_connection()
-	cur = conn.cursor()
-	sid = sample.get("id") or str(uuid.uuid4())
-	now = datetime.utcnow().isoformat()
-	cur.execute("REPLACE INTO samples (id, sample_no, created_at, data_json) VALUES (?, ?, ?, ?)",
-				(sid, sample.get("sample_no"), now, json.dumps(sample, ensure_ascii=False)))
-	conn.commit()
-	conn.close()
-	return sid
-
-
-def save_sample(sample: dict):
-	# Attempt to save to the selected storage. If Supabase is chosen but fails
-	# (missing env vars, network error, auth), automatically fall back to local
-	# sqlite storage so user actions (imports, form saves) do not silently fail.
-	if get_storage_mode() == 'supabase':
-		try:
-			return supabase_save_sample(sample)
-		except Exception as e:
-			# warn user and fall back to local storage
-			try:
-				st.warning(f"Supabase 保存に失敗したためローカル DB に保存します: {e}")
-			except Exception:
-				pass
-			return save_sample_local(sample)
-	else:
-		return save_sample_local(sample)
-
-
-def load_all_samples_local():
-	conn = get_db_connection()
-	cur = conn.cursor()
-	cur.execute("SELECT id, sample_no, created_at, data_json FROM samples ORDER BY created_at DESC")
-	rows = cur.fetchall()
-	conn.close()
-	samples = []
-	for r in rows:
-		try:
-			data = json.loads(r[3])
-		except Exception:
-			data = {}
-		samples.append({"id": r[0], "sample_no": r[1], "created_at": r[2], **data})
-	return samples
-
-
-def load_all_samples():
-	# If user selected supabase but env vars are not set, fall back to local and warn.
-	if get_storage_mode() == 'supabase':
-		if not SUPABASE_URL or not SUPABASE_KEY:
-			st.warning("Supabase が設定されていません。ローカル DB を使用します。")
-			return load_all_samples_local()
-		try:
-			return supabase_load_all_samples()
-		except Exception as e:
-			st.error(f"Supabase 取得に失敗しました。ローカル DB にフォールバックします: {e}")
-			return load_all_samples_local()
-	else:
-		return load_all_samples_local()
-
-
-def delete_sample_local(sample_id: str):
-	conn = get_db_connection()
-	cur = conn.cursor()
-	cur.execute("DELETE FROM samples WHERE id = ?", (sample_id,))
-	conn.commit()
-	conn.close()
+# Paths
+DB_PATH = os.environ.get('SAMPLES_DB_PATH', 'samples.db')
+PRESET_PATH = os.environ.get('PRESETS_PATH', 'presets.json')
 
 
 def get_db_connection():
@@ -185,6 +30,111 @@ def get_db_connection():
 		pass
 	return conn
 
+
+def init_db():
+	"""Initialize the local SQLite database with required tables."""
+	conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+	cur = conn.cursor()
+	cur.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS samples (
+			id TEXT PRIMARY KEY,
+			sample_no TEXT,
+			created_at TEXT,
+			data_json TEXT
+		)
+		"""
+	)
+	conn.commit()
+	conn.close()
+
+
+def get_storage_mode() -> str:
+	"""Return current storage mode from session (local or supabase)."""
+	try:
+		mode = st.session_state.get('storage_mode') or 'local'
+		return mode
+	except Exception:
+		return 'local'
+
+
+def save_sample_local(sample: dict):
+	conn = get_db_connection()
+	cur = conn.cursor()
+	sid = sample.get("id") or str(uuid.uuid4())
+	now = datetime.utcnow().isoformat()
+	cur.execute("REPLACE INTO samples (id, sample_no, created_at, data_json) VALUES (?, ?, ?, ?)",
+				(sid, sample.get("sample_no"), now, json.dumps(sample, ensure_ascii=False)))
+	conn.commit()
+	conn.close()
+	return sid
+
+
+def load_all_samples_local() -> List[Dict[str, Any]]:
+	conn = get_db_connection()
+	cur = conn.cursor()
+	cur.execute("SELECT id, sample_no, created_at, data_json FROM samples ORDER BY created_at DESC")
+	rows = cur.fetchall()
+	conn.close()
+	samples: List[Dict[str, Any]] = []
+	for r in rows:
+		try:
+			data = json.loads(r[3])
+		except Exception:
+			data = {}
+		samples.append({"id": r[0], "sample_no": r[1], "created_at": r[2], **data})
+	return samples
+
+
+def delete_sample_local(sample_id: str):
+	conn = get_db_connection()
+	cur = conn.cursor()
+	cur.execute("DELETE FROM samples WHERE id = ?", (sample_id,))
+	conn.commit()
+	conn.close()
+	return True
+
+
+# Supabase stubs — will raise to trigger fallback if selected without setup
+def supabase_save_sample(sample: dict):
+	raise RuntimeError("Supabase not configured")
+
+
+def supabase_load_all_samples() -> List[Dict[str, Any]]:
+	raise RuntimeError("Supabase not configured")
+
+
+def supabase_delete_sample(sample_id: str):
+	raise RuntimeError("Supabase not configured")
+
+
+def save_sample(sample: dict):
+	# Attempt to save to the selected storage. If Supabase is chosen but fails, fall back to local.
+	if get_storage_mode() == 'supabase':
+		try:
+			return supabase_save_sample(sample)
+		except Exception as e:
+			try:
+				st.warning(f"Supabase 保存に失敗したためローカル DB に保存します: {e}")
+			except Exception:
+				pass
+			return save_sample_local(sample)
+	else:
+		return save_sample_local(sample)
+
+
+def load_all_samples() -> List[Dict[str, Any]]:
+	if get_storage_mode() == 'supabase':
+		try:
+			return supabase_load_all_samples()
+		except Exception as e:
+			try:
+				st.warning(f"Supabase 取得に失敗しました。ローカル DB を使用します: {e}")
+			except Exception:
+				pass
+			return load_all_samples_local()
+	else:
+		return load_all_samples_local()
 
 
 def compute_theoretical_density(composition: dict, unit_cell_vol_ang3: float, z_per_cell: float = 1.0) -> float:
@@ -598,90 +548,10 @@ with st.form("sample_form", clear_on_submit=False):
 	# Use session_state-backed composition text so preset selection can update it immediately
 	comp_text = comp_text_area.text_area("組成 JSON (例: {\"Ba\":0.5, \"Zr\":0.5})", value=st.session_state.get('composition_text', ''), height=120, key='composition_text')
 
-	# Two form submit buttons: one to save, another to compute densities using current form values
-	# Primary form submit (保存) and a separate compute button.
-	# Note: st.form_submit_button does not accept a `key` argument in this Streamlit version,
-	# so we call it without `key` and rely on the returned booleans to determine which
-	# button was pressed.
-	submitted = st.form_submit_button("保存")
-	compute_in_form = st.form_submit_button("相対密度を算出（フォーム内）")
+	# Single action: compute densities and save
+	submitted = st.form_submit_button("計算して保存")
 
-	# If the user pressed the in-form compute button, calculate densities from current form fields
-	if compute_in_form:
-		# Use the form variables (thickness_mm, pellet_*, unit_cell_vol, composition text, z_per_cell) which are in-scope here
-		try:
-			# Measured density (use pellet geometry prefixed fields)
-			pmass_f = safe_float(st.session_state.get('pellet_mass_g') or pellet_mass_g or 0.0)
-			pth_f = safe_float(st.session_state.get('pellet_thickness_mm') or pellet_thickness_mm or 0.0)
-			pdia_f = safe_float(st.session_state.get('pellet_diameter_mm') or pellet_diameter_mm or 0.0)
-			meas_val = None
-			if pmass_f and pth_f and pdia_f:
-				th_cm = pth_f / 10.0
-				d_cm = pdia_f / 10.0
-				vol_cm3 = math.pi * (d_cm / 2.0) ** 2 * th_cm
-				if vol_cm3 > 0:
-					meas_val = pmass_f / vol_cm3
-		except Exception as e:
-			meas_val = None
-
-		# Theoretical density: prefer manual input, else compute from composition + unit cell vol and Z
-		try:
-			manual_theo_f = safe_float(st.session_state.get('theoretical_density_input') or theoretical_density_input or 0.0)
-		except Exception:
-			manual_theo_f = 0.0
-		theo_val = None
-		try:
-			if manual_theo_f and manual_theo_f > 0:
-				theo_val = manual_theo_f
-			else:
-				ucv_f = safe_float(st.session_state.get('unit_cell_vol') or unit_cell_vol or 0.0)
-				comp_json_f = st.session_state.get('composition_text') or comp_text or '{}'
-				comp_dict_f = {}
-				try:
-					comp_dict_f = json.loads(comp_json_f) if comp_json_f and comp_json_f.strip() else {}
-				except Exception:
-					comp_dict_f = {}
-				if ucv_f and comp_dict_f:
-					z_f = safe_float(st.session_state.get('z_per_cell') or z_per_cell or 1.0)
-					base_t = compute_theoretical_density(comp_dict_f, float(ucv_f), float(z_f))
-					if base_t is not None:
-						theo_val = base_t
-		except Exception:
-			theo_val = None
-
-		rel_val = None
-		if meas_val is not None and theo_val is not None and theo_val > 0:
-			rel_val = (meas_val / theo_val) * 100.0
-
-		# push computed values to session_state so UI reflects them
-		st.session_state['computed_measured_density'] = meas_val
-		st.session_state['computed_theoretical_density'] = theo_val
-		st.session_state['computed_relative_density'] = rel_val
-		st.session_state['measured_density_display_value'] = meas_val
-		st.session_state['theoretical_density_display_value'] = theo_val
-		st.session_state['relative_density_display_value'] = rel_val
-
-		# show debug expander contents inline
-		with st.expander('密度計算デバッグ (中間値)', expanded=True):
-			try:
-				z_dbg_f = float(st.session_state.get('z_per_cell') or z_per_cell or 1.0)
-				dbg = compute_theoretical_density_debug(comp_dict_f if 'comp_dict_f' in locals() else {}, float(ucv_f) if 'ucv_f' in locals() else 0, z_dbg_f)
-				st.write({'pellet_mass_g': pmass_f, 'pellet_thickness_mm': pth_f, 'pellet_diameter_mm': pdia_f, 'measured_density_calc': meas_val, 'manual_theo_input': manual_theo_f, 'z_per_cell': z_dbg_f, 'unit_cell_vol': ucv_f, 'parsed_composition': comp_dict_f, 'theoretical_debug': dbg})
-			except Exception as e:
-				st.write('デバッグ情報の取得に失敗しました:', e)
-
-		# set visible relative input and rerun to refresh form-bound widgets
-		try:
-			st.session_state['relative_density_pct'] = float(rel_val) if rel_val is not None else st.session_state.get('relative_density_pct', 0.0)
-		except Exception:
-			pass
-		if rel_val is not None:
-			st.success(f"計算結果 — 実測密度: {meas_val:.6f} g/cm^3, 理論密度: {theo_val:.6f} g/cm^3, 相対密度: {rel_val:.3f} %")
-		else:
-			st.info('相対密度は計算されませんでした（実測密度か理論密度が不足しています）。')
-		st.experimental_rerun()
-
-# Compute density button must be outside the st.form (Streamlit forbids st.button inside form except form_submit_button)
+	# Compute density button must be outside the st.form (Streamlit forbids st.button inside form except form_submit_button)
 compute_col1, compute_col2 = st.columns([1,3])
 with compute_col1:
 	if st.button("相対密度を算出", key='compute_density_outside'):
@@ -780,73 +650,6 @@ with compute_col1:
 		st.experimental_rerun()
 with compute_col2:
 	st.markdown("")
-
-	# additional helper: compute theoretical density from the currently selected preset/composition and unit cell volume
-	if st.button("プリセット／組成から理論密度を算出", key='compute_theo_from_preset'):
-		# read composition (prefer preset if selected)
-		comp_json = st.session_state.get('composition_text') or '{}'
-		try:
-			comp = json.loads(comp_json) if comp_json and comp_json.strip() else {}
-		except Exception:
-			comp = {}
-		# unit cell volume from form or session
-		ucv = float(st.session_state.get('unit_cell_vol') or 0)
-		z = float(st.session_state.get('z_per_cell') or 1.0)
-		base_theo = None
-		try:
-			if ucv and ucv > 0:
-				base_theo = compute_theoretical_density(comp, ucv, float(z))
-		except Exception:
-			base_theo = None
-		if base_theo is not None:
-			theo = base_theo * float(z)
-			st.session_state['computed_theoretical_density'] = theo
-		else:
-			theo = None
-		# compute measured density if pellet geometry present
-		pmass = st.session_state.get('pellet_mass_g')
-		pth = st.session_state.get('pellet_thickness_mm')
-		pdia = st.session_state.get('pellet_diameter_mm')
-		meas = None
-		try:
-			if pmass and pth and pdia:
-				th_cm = float(pth) / 10.0
-				d_cm = float(pdia) / 10.0
-				vol_cm3 = math.pi * (d_cm / 2.0) ** 2 * th_cm
-				if vol_cm3 > 0:
-					meas = float(pmass) / vol_cm3
-		except Exception:
-			meas = None
-		rel = None
-		if meas and theo and theo > 0:
-			rel = (meas / theo) * 100.0
-		st.session_state['computed_measured_density'] = meas
-		st.session_state['computed_relative_density'] = rel
-		if theo is not None:
-			st.session_state['computed_theoretical_density'] = theo
-			st.session_state['theoretical_density_g_cm3'] = theo
-		# set display keys for immediate form reflection
-		st.session_state['measured_density_display_value'] = meas
-		st.session_state['theoretical_density_display_value'] = theo
-		st.session_state['relative_density_display_value'] = rel
-
-		# debug expander for theoretical computation
-		with st.expander('理論密度計算デバッグ (中間値)', expanded=True):
-			try:
-				dbg_comp = comp
-				ucv_dbg2 = float(ucv or 0)
-				dbg2 = compute_theoretical_density_debug(dbg_comp, ucv_dbg2, float(z)) if ucv_dbg2 else {'composition': dbg_comp}
-				st.write(dbg2)
-			except Exception as e:
-				st.write('デバッグ情報の取得に失敗しました:', e)
-		# update visible field
-		try:
-			st.session_state['relative_density_pct'] = float(rel) if rel is not None else st.session_state.get('relative_density_pct', 0.0)
-		except Exception:
-			pass
-		st.success(f"プリセット由来の理論密度: {theo or 'N/A'} g/cm^3, 実測: {meas or 'N/A'} g/cm^3, 相対密度: {rel or 'N/A'} %")
-		# rerun to reflect updated session_state values in the form
-		st.experimental_rerun()
 
 # auto-reflect of computed values is active; display keys are set by compute handlers
 
@@ -965,43 +768,33 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 			"meta": {"saved_at": datetime.utcnow().isoformat()},
 		}
 
-		# compute densities and persist per-sample values
-		# The top-level helper compute_theoretical_density (defined earlier) is used here.
-		# Prefer manual theoretical input; otherwise compute from composition + unit cell volume and scale by Z.
+		# compute densities using current form values (avoid relying on session_state at submit time)
 		theoretical_density = None
-		# recompute theoretical from current form/session values to avoid stale saves
 		try:
-			manual_theo = safe_float(st.session_state.get('theoretical_density_input') or 0.0)
+			manual_theo = safe_float(theoretical_density_input or 0.0)
 			if manual_theo and manual_theo > 0:
 				theoretical_density = manual_theo
 			else:
-				ucv = None
-				# unit_cell_vol may be entered in the form field 'unit_cell_vol' or in sample
-				try:
-					ucv = float(st.session_state.get('unit_cell_vol') or sample.get('unit_cell_volume') or 0)
-				except Exception:
-					ucv = None
-				if ucv:
-					z_val = safe_float(st.session_state.get('z_per_cell') or sample.get('z_per_cell') or 1.0)
+				ucv = safe_float(unit_cell_vol or 0.0)
+				if ucv and ucv > 0:
+					z_val = safe_float(z_per_cell or 1.0)
 					base = compute_theoretical_density(sample.get('composition', {}), float(ucv), float(z_val))
 					if base is not None:
 						theoretical_density = base
 		except Exception:
 			theoretical_density = None
 
-		# Measured density: always recompute from the saved pellet geometry/mass to avoid stale cached values
 		measured_density = None
 		try:
-			# prefer explicit pellet fields (form/session or sample) in this precedence
-			pmass = safe_float(st.session_state.get('pellet_mass_g') or sample.get('pellet_mass_g') or 0.0)
-			pth = safe_float(st.session_state.get('pellet_thickness_mm') or sample.get('pellet_thickness_mm') or sample.get('thickness_mm') or 0.0)
-			pdia = safe_float(st.session_state.get('pellet_diameter_mm') or sample.get('pellet_diameter_mm') or sample.get('electrode_diameter_mm') or 0.0)
+			pmass = safe_float(pellet_mass_g or 0.0)
+			pth = safe_float(pellet_thickness_mm or 0.0)
+			pdia = safe_float(pellet_diameter_mm or 0.0)
 			if pmass and pth and pdia:
-				th_cm = pth / 10.0
-				d_cm = pdia / 10.0
+				th_cm = float(pth) / 10.0
+				d_cm = float(pdia) / 10.0
 				vol_cm3 = math.pi * (d_cm / 2.0) ** 2 * th_cm
 				if vol_cm3 > 0:
-					measured_density = pmass / vol_cm3
+					measured_density = float(pmass) / vol_cm3
 		except Exception:
 			measured_density = None
 
@@ -1854,9 +1647,28 @@ else:
 			reason.append('no R')
 		for T_str, rinfo in resistances.items():
 			try:
-				T_c = float(T_str)
-				R = float(rinfo.get('resistance_ohm'))
-				sigma = calculate_sigma(thickness_mm, R, electrode_diameter_mm)
+				import re
+				# temperature key parsing (supports '600', 600, 'R_600', 'T600')
+				if isinstance(T_str, (int, float)):
+					T_c = float(T_str)
+				else:
+					m = re.search(r"(\d+(?:\.\d+)?)", str(T_str))
+					if not m:
+						raise ValueError(f"温度キーが数値に変換できません: {T_str}")
+					T_c = float(m.group(1))
+				# resistance value parsing (dict with 'resistance_ohm' or raw number)
+				R = None
+				if isinstance(rinfo, dict):
+					R = rinfo.get('resistance_ohm') or rinfo.get('R') or rinfo.get('value')
+				else:
+					R = rinfo
+				R = float(R)
+				# geometry safeties
+				th = float(thickness_mm)
+				dia = float(electrode_diameter_mm)
+				if th <= 0 or dia <= 0 or R <= 0:
+					raise ValueError("幾何か抵抗値が無効です")
+				sigma = calculate_sigma(th, R, dia)
 				T_k = T_c + 273.15
 				rows.append({'sample_id': sid, 'sample_no': s.get('sample_no'), 'T_c': T_c, 'T_k': T_k, 'sigma_S_cm': sigma})
 			except Exception:
