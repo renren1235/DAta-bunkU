@@ -1033,14 +1033,14 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 		except Exception:
 			pass
 
-		# persist pellet & geometry values (prefer form/session values)
+		# persist pellet & geometry values (use form variables directly as they are already captured at submit time)
 		try:
-			sample['pellet_mass_g'] = float(st.session_state.get('pellet_mass_g') or pellet_mass_g or sample.get('pellet_mass_g') or 0.0)
-			sample['thickness_mm'] = float(st.session_state.get('thickness_mm') or thickness_mm or sample.get('thickness_mm') or 0.0)
-			sample['electrode_diameter_mm'] = float(st.session_state.get('electrode_diameter_mm') or electrode_diameter_mm or sample.get('electrode_diameter_mm') or 0.0)
-			sample['pellet_thickness_mm'] = float(st.session_state.get('pellet_thickness_mm') or pellet_thickness_mm or sample.get('pellet_thickness_mm') or 0.0)
-			sample['pellet_diameter_mm'] = float(st.session_state.get('pellet_diameter_mm') or pellet_diameter_mm or sample.get('pellet_diameter_mm') or 0.0)
-			sample['z_per_cell'] = float(st.session_state.get('z_per_cell') or z_per_cell or sample.get('z_per_cell') or 1.0)
+			sample['pellet_mass_g'] = float(pellet_mass_g)
+			sample['thickness_mm'] = float(thickness_mm)
+			sample['electrode_diameter_mm'] = float(electrode_diameter_mm)
+			sample['pellet_thickness_mm'] = float(pellet_thickness_mm)
+			sample['pellet_diameter_mm'] = float(pellet_diameter_mm)
+			sample['z_per_cell'] = float(z_per_cell)
 		except Exception:
 			pass
 
