@@ -1104,6 +1104,12 @@ for s in samples:
 		"unit_cell_volume_err": s.get("unit_cell_volume_err"),
 		"thickness_mm": s.get("thickness_mm"),
 		"electrode_diameter_mm": s.get("electrode_diameter_mm"),
+		"pellet_thickness_mm": s.get("pellet_thickness_mm"),
+		"pellet_diameter_mm": s.get("pellet_diameter_mm"),
+		"pellet_mass_g": s.get("pellet_mass_g"),
+		"z_per_cell": s.get("z_per_cell"),
+		"measured_density_g_cm3": s.get("measured_density_g_cm3"),
+		"theoretical_density_g_cm3": s.get("theoretical_density_g_cm3"),
 		"resistances": json.dumps(s.get("resistances", {}), ensure_ascii=False),
 	}
 	# add dynamic R_<T> columns
@@ -1878,7 +1884,17 @@ if st.button("全サンプルを CSV にエクスポート"):
 	all_samples = load_all_samples()
 	out_rows = []
 	for s in all_samples:
-		row = {"id": s.get("id"), "sample_no": s.get("sample_no")}
+		row = {
+			"id": s.get("id"),
+			"sample_no": s.get("sample_no"),
+			"measured_density_g_cm3": s.get("measured_density_g_cm3"),
+			"theoretical_density_g_cm3": s.get("theoretical_density_g_cm3"),
+			"relative_density_pct": s.get("relative_density_pct"),
+			"pellet_thickness_mm": s.get("pellet_thickness_mm"),
+			"pellet_diameter_mm": s.get("pellet_diameter_mm"),
+			"pellet_mass_g": s.get("pellet_mass_g"),
+			"z_per_cell": s.get("z_per_cell"),
+		}
 		# flatten some fields
 		row['composition'] = json.dumps(s.get('composition', {}), ensure_ascii=False)
 		row['thickness_mm'] = s.get('thickness_mm')
