@@ -82,9 +82,13 @@ def save_sample_local(sample: dict):
 	conn = get_db_connection()
 	cur = conn.cursor()
 	sid = sample.get("id") or str(uuid.uuid4())
-	now = datetime.utcnow().isoformat()
+	# keep existing created_at when editing; set if new
+	created_at = sample.get("created_at") or datetime.utcnow().isoformat()
+	# also reflect these into the JSON blob for consistency
+	sample["id"] = sid
+	sample["created_at"] = created_at
 	cur.execute("REPLACE INTO samples (id, sample_no, created_at, data_json) VALUES (?, ?, ?, ?)",
-				(sid, sample.get("sample_no"), now, json.dumps(sample, ensure_ascii=False)))
+				(sid, sample.get("sample_no"), created_at, json.dumps(sample, ensure_ascii=False)))
 	conn.commit()
 	conn.close()
 	return sid
@@ -865,6 +869,13 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 		# preserve id if editing an existing sample
 		if st.session_state.get('editing_sample') and st.session_state['editing_sample'].get('id'):
 			sample['id'] = st.session_state['editing_sample']['id']
+			# also preserve original created_at if present
+			try:
+				orig_created = st.session_state['editing_sample'].get('created_at')
+				if orig_created:
+					sample['created_at'] = orig_created
+			except Exception:
+				pass
 
 		sid = save_sample(sample)
 		st.success(f"保存しました: id={sid}")
@@ -1739,27 +1750,58 @@ else:
 # Bulk export all samples as CSV
 st.markdown("---")
 if st.button("全サンプルを CSV にエクスポート"):
-	all_samples = load_all_samples()
-	out_rows = []
-	for s in all_samples:
-		row = {
-			"id": s.get("id"),
-			"sample_no": s.get("sample_no"),
-			"measured_density_g_cm3": s.get("measured_density_g_cm3"),
-			"theoretical_density_g_cm3": s.get("theoretical_density_g_cm3"),
-			"relative_density_pct": s.get("relative_density_pct"),
-			"pellet_thickness_mm": s.get("pellet_thickness_mm"),
-			"pellet_diameter_mm": s.get("pellet_diameter_mm"),
-			"pellet_mass_g": s.get("pellet_mass_g"),
-			"z_per_cell": s.get("z_per_cell"),
-		}
-		# flatten some fields
-		row['composition'] = json.dumps(s.get('composition', {}), ensure_ascii=False)
-		row['thickness_mm'] = s.get('thickness_mm')
-		row['electrode_diameter_mm'] = s.get('electrode_diameter_mm')
-		row['resistances'] = json.dumps(s.get('resistances', {}), ensure_ascii=False)
-		out_rows.append(row)
-	df_all = pd.DataFrame(out_rows)
+	# reuse df (full_rows DataFrame) which already contains all mapped fields and dynamic R_T columns
+	df_all = df.copy() if 'df' in locals() else pd.DataFrame([])
+	if df_all.empty:
+		# build from load_all_samples as fallback
+		all_samples = load_all_samples()
+		rows = []
+		for s in all_samples:
+			base = {
+				"id": s.get("id"),
+				"sample_no": s.get("sample_no", ""),
+				"created_at": s.get("created_at", ""),
+				"composition": json.dumps(s.get("composition", {}), ensure_ascii=False),
+				"comp_normalized": json.dumps(s.get("comp_normalized", {}), ensure_ascii=False),
+				"element_numeric": json.dumps(s.get("element_numeric", {}), ensure_ascii=False),
+				"crystal_system": s.get("crystal_system"),
+				"a": s.get("a"),
+				"a_err": s.get("a_err"),
+				"b": s.get("b"),
+				"b_err": s.get("b_err"),
+				"c": s.get("c"),
+				"c_err": s.get("c_err"),
+				"unit_cell_volume": s.get("unit_cell_volume"),
+				"unit_cell_volume_err": s.get("unit_cell_volume_err"),
+				"thickness_mm": s.get("thickness_mm"),
+				"electrode_diameter_mm": s.get("electrode_diameter_mm"),
+				"pellet_thickness_mm": s.get("pellet_thickness_mm"),
+				"pellet_diameter_mm": s.get("pellet_diameter_mm"),
+				"pellet_mass_g": s.get("pellet_mass_g"),
+				"z_per_cell": s.get("z_per_cell"),
+				"measured_density_g_cm3": s.get("measured_density_g_cm3"),
+				"theoretical_density_g_cm3": s.get("theoretical_density_g_cm3"),
+				"relative_density_pct": s.get("relative_density_pct"),
+				"synthesis_method": s.get("synthesis_method"),
+				"calcination_temp_c": s.get("calcination_temp_c"),
+				"calcination_time_h": s.get("calcination_time_h"),
+				"atmosphere": s.get("atmosphere"),
+			}
+			# expand resistances to dynamic columns
+			try:
+				import re
+				for k, v in (s.get('resistances') or {}).items():
+					m = re.search(r"(\d{3})", str(k))
+					Tkey = m.group(1) if m else str(k)
+					val = v.get('resistance_ohm') if isinstance(v, dict) else v
+					base[f"R_{Tkey}"] = val
+			except Exception:
+				pass
+			# include element numeric fields if present at top-level
+			for e in ['ba','zr','ce','y','yb','zn','ni','co','fe']:
+				base[e] = s.get(e)
+			rows.append(base)
+		df_all = pd.DataFrame(rows)
 	csv = df_all.to_csv(index=False)
 	st.download_button("ダウンロード all_samples.csv", csv, file_name="all_samples.csv", mime="text/csv")
 
