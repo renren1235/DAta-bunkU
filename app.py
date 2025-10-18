@@ -299,6 +299,18 @@ def safe_float(val, default=0.0):
 		return float(default)
 
 
+def float_or_none(val):
+	"""Convert to float if possible; return None if val is None/empty/invalid."""
+	try:
+		if val is None:
+			return None
+		if isinstance(val, str) and val.strip() == "":
+			return None
+		return float(val)
+	except Exception:
+		return None
+
+
 def delete_sample(sample_id: str):
 	if get_storage_mode() == 'supabase':
 		return supabase_delete_sample(sample_id)
@@ -923,14 +935,14 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 			"comp_normalized": comp_norm,
 			"element_numeric": elem_nums,
 			"crystal_system": crystal_system,
-			"a": (float(a_val) if a_val not in (None, "") else None),
-			"a_err": (float(a_err) if a_err not in (None, "") else None),
-			"b": (float(b_val) if b_val not in (None, "") else None),
-			"b_err": (float(b_err) if b_err not in (None, "") else None),
-			"c": (float(c_val) if c_val not in (None, "") else None),
-			"c_err": (float(c_err) if c_err not in (None, "") else None),
-			"unit_cell_volume": (float(unit_cell_vol) if unit_cell_vol not in (None, "") else None),
-			"unit_cell_volume_err": (float(unit_cell_vol_err) if unit_cell_vol_err not in (None, "") else None),
+			"a": float_or_none(a_val),
+			"a_err": float_or_none(a_err),
+			"b": float_or_none(b_val),
+			"b_err": float_or_none(b_err),
+			"c": float_or_none(c_val),
+			"c_err": float_or_none(c_err),
+			"unit_cell_volume": float_or_none(unit_cell_vol),
+			"unit_cell_volume_err": float_or_none(unit_cell_vol_err),
 			"synthesis_method": synthesis_method,
 			"calcination_temp_c": float(calcination_temp_c),
 			"calcination_time_h": float(calcination_time_h),
