@@ -836,6 +836,11 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 			sample['z_per_cell'] = float(z_per_cell)
 		except Exception:
 			pass
+		# --- measured_density_g_cm3: always reflect form value ---
+		try:
+			sample['measured_density_g_cm3'] = float(measured_density_form)
+		except Exception:
+			sample['measured_density_g_cm3'] = measured_density_form
 
 		# preserve id if editing an existing sample
 		if st.session_state.get('editing_sample') and st.session_state['editing_sample'].get('id'):
@@ -1338,10 +1343,16 @@ with colA:
 									pass
 
 						# pellet geometry and mass
-						for key in ['pellet_mass_g','pellet_thickness_mm','pellet_diameter_mm','thickness_mm','electrode_diameter_mm']:
+						for key in [
+							'pellet_mass_g','pellet_thickness_mm','pellet_diameter_mm','thickness_mm','electrode_diameter_mm',
+							'measured_density_g_cm3','theoretical_density_g_cm3','relative_density_pct',
+							'sample_no','synthesis_method','calcination_temp_c','calcination_time_h','atmosphere',
+							'unit_cell_volume','unit_cell_volume_err','z_per_cell',
+							'a','a_err','b','b_err','c','c_err','crystal_system'
+						]:
 							if key in df_up.columns:
 								try:
-									sample[key] = float(row[key])
+									sample[key] = float(row[key]) if key not in ['sample_no','synthesis_method','atmosphere','crystal_system'] else str(row[key])
 								except Exception:
 									sample[key] = row.get(key)
 
