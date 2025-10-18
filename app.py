@@ -1216,14 +1216,25 @@ with colA:
 			cols = df_up.columns.tolist()
 			st.markdown("自動検出されたカラム: " + ", ".join(cols))
 
-			# simple mapping UI
-			st.markdown("**マッピング（適切なカラムを選んでください）**")
-			map_sample_no = st.selectbox("試料No カラム", options=["(なし)"] + cols, index=0)
-			map_composition = st.selectbox("組成（JSONまたは個別元素カラム）", options=["(なし)"] + cols, index=0)
-			map_thickness = st.selectbox("厚さ (mm)", options=["(なし)"] + cols, index=0)
-			map_electrode = st.selectbox("電極直径 (mm)", options=["(なし)"] + cols, index=0)
-			st.markdown("抵抗（R_600 など温度付きカラム）がある場合は以下で選択してください（複数選択可）")
-			resistance_cols = st.multiselect("抵抗カラム", options=cols)
+			# Auto-map toggle: when enabled, we skip manual mapping UI and import all detected columns automatically
+			auto_map_all = st.checkbox("自動マッピングで全カラムを取り込む（推奨）", value=True)
+
+			# Manual mapping UI (optional)
+			if not auto_map_all:
+				st.markdown("**マッピング（適切なカラムを選んでください）**")
+				map_sample_no = st.selectbox("試料No カラム", options=["(なし)"] + cols, index=0)
+				map_composition = st.selectbox("組成（JSONまたは個別元素カラム）", options=["(なし)"] + cols, index=0)
+				map_thickness = st.selectbox("厚さ (mm)", options=["(なし)"] + cols, index=0)
+				map_electrode = st.selectbox("電極直径 (mm)", options=["(なし)"] + cols, index=0)
+				st.markdown("抵抗（R_600 など温度付きカラム）がある場合は以下で選択してください（複数選択可）")
+				resistance_cols = st.multiselect("抵抗カラム", options=cols)
+			else:
+				# placeholders for manual vars so later code can reference them safely
+				map_sample_no = '(なし)'
+				map_composition = '(なし)'
+				map_thickness = '(なし)'
+				map_electrode = '(なし)'
+				resistance_cols = []
 
 			if st.button("インポート実行"):
 				imported = 0
@@ -1232,16 +1243,33 @@ with colA:
 				errors = []
 				# quick debug: show number of rows and mapping choices
 				try:
-					st.info(f"インポート開始: {len(df_up)} 行 (sample_no col: {map_sample_no}, composition col: {map_composition})")
+					mode = '自動マッピング' if auto_map_all else '手動マッピング'
+					st.info(f"インポート開始: {len(df_up)} 行（モード: {mode}）")
 				except Exception:
 					pass
+
+				# helpers for auto-mapping
+				import re
+				norm_cols = {c.lower().replace(' ','').replace('_',''): c for c in df_up.columns}
+				def find_col(candidates):
+					for cand in candidates:
+						key = cand.lower().replace(' ','').replace('_','')
+						if key in norm_cols:
+							return norm_cols[key]
+					return None
 				for idx, row in df_up.iterrows():
 					try:
 						sample = {}
-						sample['sample_no'] = str(row[map_sample_no]) if map_sample_no != '(なし)' else f"import_{idx}"
+						# sample_no
+						if not auto_map_all and map_sample_no != '(なし)':
+							sample['sample_no'] = str(row[map_sample_no])
+						else:
+							# try common names: sample_no, sample, 試料No, 試料番号
+							c = find_col(['sample_no','sample','sampleno','試料no','試料番号','サンプルno'])
+							sample['sample_no'] = str(row[c]) if c else f"import_{idx}"
 						# composition
 						comp = {}
-						if map_composition != '(なし)':
+						if (not auto_map_all and map_composition != '(なし)'):
 							val = row[map_composition]
 							# try JSON parse
 							# robust parsing: accept dict, JSON string, key:val pairs, or condensed element+number strings
@@ -1276,18 +1304,51 @@ with colA:
 								return {}
 							comp = parse_comp_value(val)
 						else:
-							# try to gather element columns case-insensitively
-							cols_lower = {c.lower(): c for c in df_up.columns}
-							for e in ['Ba','Zr','Ce','Y','Yb','Zn','Ni','Co','Fe','O']:
-								colname = cols_lower.get(e.lower())
-								if colname:
-									try:
-										v = row[colname]
-										if pd.isna(v):
-											continue
-										comp[e] = float(v)
-									except Exception:
-										pass
+							# auto: prefer a composition/組成 column; else gather element columns case-insensitively
+							cand = find_col(['composition','組成'])
+							if cand:
+								val = row[cand]
+								def parse_comp_value(v):
+									if v is None:
+										return {}
+									if isinstance(v, dict):
+										return v
+									if isinstance(v, (int, float)):
+										return {}
+									if isinstance(v, str):
+										s = v.strip()
+										# try JSON
+										try:
+											if s.startswith('{') or s.startswith('['):
+												return json.loads(s)
+										except Exception:
+											pass
+										# try key:value pairs
+										pairs = re.findall(r'([A-Za-z]{1,2})\s*[:=]\s*([0-9]+\.?[0-9]*)', s)
+										if pairs:
+											return {k: float(v) for k, v in pairs}
+										# try condensed like Ba1Zr0.4...
+										pairs2 = re.findall(r'([A-Z][a-z]?)([0-9]*\.?[0-9]+)', s)
+										if pairs2:
+											return {k: float(v) for k, v in pairs2}
+										# symbols space-separated
+										symbols = re.findall(r'([A-Z][a-z]?)', s)
+										if symbols:
+											return {k: 1.0 for k in symbols}
+									return {}
+								comp = parse_comp_value(val)
+							else:
+								cols_lower = {c.lower(): c for c in df_up.columns}
+								for e in ['Ba','Zr','Ce','Y','Yb','Zn','Ni','Co','Fe','O']:
+									colname = cols_lower.get(e.lower())
+									if colname:
+										try:
+											v = row[colname]
+											if pd.isna(v):
+												continue
+											comp[e] = float(v)
+										except Exception:
+											pass
 						# Perovskite rule: if Ba or A present and O missing, add O=3.0 to allow correct theoretical density calc
 						try:
 							if isinstance(comp, dict) and ('O' not in comp) and (('Ba' in comp) or ('A' in comp)):
@@ -1299,18 +1360,26 @@ with colA:
 						sample['comp_normalized'] = normalize_composition(comp)
 						sample['element_numeric'] = element_numeric_fields(sample['comp_normalized'])
 
-						# thickness/electrode
+						# thickness/electrode (manual mapping or auto by synonyms)
 						try:
-							if map_thickness != '(なし)':
-								sample['thickness_mm'] = float(row[map_thickness])
-							if map_electrode != '(なし)':
-								sample['electrode_diameter_mm'] = float(row[map_electrode])
+							if not auto_map_all:
+								if map_thickness != '(なし)':
+									sample['thickness_mm'] = float(row[map_thickness])
+								if map_electrode != '(なし)':
+									sample['electrode_diameter_mm'] = float(row[map_electrode])
+							else:
+								ct = find_col(['thickness_mm','pellet_thickness_mm','厚さ'])
+								ce = find_col(['electrode_diameter_mm','pellet_diameter_mm','電極直径','ペレット直径'])
+								if ct:
+									sample['thickness_mm'] = float(row[ct])
+								if ce:
+									sample['electrode_diameter_mm'] = float(row[ce])
 						except Exception:
 							pass
 
-						# resistances: accept explicit selection, any R_### columns, numeric-temp column names, or a JSON 'resistances' cell
+						# resistances: accept explicit selection (manual mode), any R_### columns, numeric-temp column names, or a JSON 'resistances' cell
 						resistances = {}
-						# start with user-selected columns
+						# start with user-selected columns (manual) else none
 						res_cols = set(resistance_cols or [])
 						# auto-detect R_ prefixed or numeric temp headers
 						for c in df_up.columns:
@@ -1580,12 +1649,16 @@ with colB:
 			st.warning("エクスポート対象のデータがありません。")
 		else:
 				df_out = pd.DataFrame(rows_out)
-				# defensive: ensure sample_no column is always present in exports
+				# defensive: ensure sample_no column present and always included in exported columns
 				if 'sample_no' not in df_out.columns:
 					# rows_out preserves original order; fill sample_no from rows_out dicts
 					df_out.insert(0, 'sample_no', [r.get('sample_no', '') for r in rows_out])
 				if chosen_fields:
-					df_out = df_out[chosen_fields]
+					# ensure sample_no is included even if user didn't select it
+					final_fields = list(chosen_fields)
+					if 'sample_no' not in final_fields:
+						final_fields.insert(0, 'sample_no')
+					df_out = df_out[final_fields]
 				csv = df_out.to_csv(index=False)
 				st.download_button("ダウンロード CSV", csv, file_name="export_selected.csv", mime="text/csv")
 
@@ -1601,11 +1674,14 @@ with colB:
 			st.warning("エクスポート対象のデータがありません。")
 		else:
 				df_out = pd.DataFrame(rows_out)
-				# defensive: ensure sample_no column is always present in exports
+				# defensive: ensure sample_no column present and always included in exported columns
 				if 'sample_no' not in df_out.columns:
 					df_out.insert(0, 'sample_no', [r.get('sample_no', '') for r in rows_out])
 				if chosen_fields:
-					df_out = df_out[chosen_fields]
+					final_fields = list(chosen_fields)
+					if 'sample_no' not in final_fields:
+						final_fields.insert(0, 'sample_no')
+					df_out = df_out[final_fields]
 				xlsx_bytes = excel_bytes_from_df(df_out)
 				st.download_button("ダウンロード XLSX", xlsx_bytes, file_name="export_selected.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
