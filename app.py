@@ -29,6 +29,8 @@ from typing import Dict, Any, List
 import streamlit as st
 import pandas as pd
 from utils import calculate_sigma, make_arrhenius_points, normalize_composition, element_numeric_fields
+from utils import compute_measured_density, compute_relative_density
+from utils import compute_theoretical_density, compute_theoretical_density_debug
 
 # Paths
 DB_PATH = os.environ.get('SAMPLES_DB_PATH', 'samples.db')
@@ -598,11 +600,9 @@ with compute_col1:
 		meas = None
 		if not errs:
 			try:
-				th_cm = float(th) / 10.0
-				d_cm = float(dia) / 10.0
-				vol_cm3 = math.pi * (d_cm / 2.0) ** 2 * th_cm
-				if vol_cm3 > 0:
-					meas = float(pmass) / vol_cm3
+				meas = compute_measured_density(pmass, th, dia)
+				if meas is None:
+					errs.append('実測密度の計算に必要な入力が不足しています。')
 			except Exception as e:
 				errs.append(f'実測密度計算で例外: {e}')
 		else:
@@ -637,9 +637,7 @@ with compute_col1:
 				if base_theo is not None:
 					theo = base_theo
 		# compute relative if possible
-		rel = None
-		if meas is not None and theo is not None and theo > 0:
-			rel = (meas / theo) * 100.0
+		rel = compute_relative_density(meas, theo)
 		# write back to session_state and also update the visible numeric input for relative_density_pct
 		st.session_state['computed_measured_density'] = meas
 		st.session_state['computed_theoretical_density'] = theo
@@ -671,7 +669,7 @@ with compute_col1:
 		else:
 			st.info('相対密度は計算されませんでした（実測密度か理論密度が不足しています）。')
 		# rerun so the form widget bound to 'relative_density_pct' refreshes and shows updated value
-		st.experimental_rerun()
+		st.rerun()
 with compute_col2:
 	st.markdown("")
 
@@ -813,12 +811,7 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 			pmass = safe_float(pellet_mass_g or 0.0)
 			pth = safe_float(pellet_thickness_mm or 0.0)
 			pdia = safe_float(pellet_diameter_mm or 0.0)
-			if pmass and pth and pdia:
-				th_cm = float(pth) / 10.0
-				d_cm = float(pdia) / 10.0
-				vol_cm3 = math.pi * (d_cm / 2.0) ** 2 * th_cm
-				if vol_cm3 > 0:
-					measured_density = float(pmass) / vol_cm3
+			measured_density = compute_measured_density(pmass, pth, pdia)
 		except Exception:
 			measured_density = None
 
@@ -833,8 +826,9 @@ with st.expander('Density Debug (詳細中間値)', expanded=False):
 		else:
 			sample.pop('measured_density_g_cm3', None)
 		# If we can compute both theoretical and measured densities, overwrite relative_density_pct
-		if theoretical_density is not None and measured_density is not None:
-			sample['relative_density_pct'] = (measured_density / theoretical_density) * 100.0
+		rel_pct = compute_relative_density(measured_density, theoretical_density)
+		if rel_pct is not None:
+			sample['relative_density_pct'] = rel_pct
 
 		# attach resistances and numeric element fields
 		for T, v in resistance_inputs.items():
