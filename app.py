@@ -459,16 +459,25 @@ with st.form("sample_form", clear_on_submit=False):
 		calcination_temp_c = st.number_input("焼成温度 (℃)", value=safe_float(st.session_state.get('calcination_temp_c', 1200)), key='calcination_temp_c')
 		calcination_time_h = st.number_input("焼成時間 (h)", value=safe_float(st.session_state.get('calcination_time_h', 10.0)), format="%.2f", key='calcination_time_h')
 		
-		# crystal system: text input with preset buttons for common choices
-		crystal_system = st.text_input("結晶系 (自由入力)", value=st.session_state.get('crystal_system', editing.get('crystal_system', '')), key='crystal_system')
-		st.markdown("**よく使う結晶系:**")
-		crystal_presets = ["立方晶 (Cubic)", "正方晶 (Tetragonal)", "六方晶 (Hexagonal)", "直方晶 (Orthorhombic)", "単斜晶 (Monoclinic)", "三斜晶 (Triclinic)", "菱面体 (Rhombohedral)"]
-		cols_crystal = st.columns(len(crystal_presets))
-		for idx, preset in enumerate(crystal_presets):
-			with cols_crystal[idx]:
-				# Use a unique key for each button to avoid conflicts
-				if st.form_submit_button(preset.split()[0], key=f"crystal_preset_{idx}"):
-					st.session_state['crystal_system'] = preset
+		# crystal system: allow free text input with selectbox for common choices
+		crystal_presets = ["(手動入力)", "立方晶 (Cubic)", "正方晶 (Tetragonal)", "六方晶 (Hexagonal)", "直方晶 (Orthorhombic)", "単斜晶 (Monoclinic)", "三斜晶 (Triclinic)", "菱面体 (Rhombohedral)"]
+		
+		# Determine current crystal system value and selectbox index
+		current_crystal = st.session_state.get('crystal_system', editing.get('crystal_system', ''))
+		if current_crystal in crystal_presets:
+			default_idx = crystal_presets.index(current_crystal)
+		elif current_crystal:
+			default_idx = 0  # manual input
+		else:
+			default_idx = 0
+		
+		crystal_select = st.selectbox("結晶系", options=crystal_presets, index=default_idx, key='crystal_system_select')
+		
+		# If manual input is selected, show text input field
+		if crystal_select == "(手動入力)":
+			crystal_system = st.text_input("結晶系 (手動入力)", value=current_crystal if current_crystal not in crystal_presets[1:] else "", key='crystal_system_manual')
+		else:
+			crystal_system = crystal_select
 		# lattice parameters are shown by default
 		st.markdown("---")
 		col_la, col_lb, col_lc = st.columns(3)
