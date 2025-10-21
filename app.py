@@ -389,6 +389,39 @@ presets = load_presets()
 if 'presets' not in st.session_state:
 	st.session_state['presets'] = presets
 
+# New sample button (outside form)
+col_new1, col_new2 = st.columns([1, 5])
+with col_new1:
+	if st.button("➕ 新規作成", key='new_sample_btn', help="フォームをクリアして新しいサンプルを作成"):
+		# Clear editing state and reset form fields to defaults
+		st.session_state['editing_sample'] = None
+		st.session_state.pop('editing_loaded_id', None)
+		st.session_state['sample_no'] = ''
+		st.session_state['composition_text'] = ''
+		st.session_state['synthesis_method'] = ''
+		st.session_state['calcination_temp_c'] = 1200.0
+		st.session_state['calcination_time_h'] = 10.0
+		st.session_state['crystal_system'] = ''
+		st.session_state['unit_cell_vol'] = ''
+		st.session_state['unit_cell_vol_err'] = ''
+		st.session_state['pellet_mass_g'] = 0.0
+		st.session_state['pellet_thickness_mm'] = 1.0
+		st.session_state['pellet_diameter_mm'] = 10.0
+		st.session_state['thickness_mm'] = 1.0
+		st.session_state['electrode_diameter_mm'] = 5.0
+		st.session_state['theoretical_density_input'] = 0.0
+		st.session_state['relative_density_pct'] = 95.0
+		st.session_state['computed_measured_density'] = None
+		st.session_state['computed_theoretical_density'] = None
+		st.session_state['computed_relative_density'] = None
+		st.session_state['measured_density_display_value'] = 0.0
+		st.session_state['theoretical_density_display_value'] = 0.0
+		st.session_state['relative_density_display_value'] = 0.0
+		st.success("フォームをクリアしました。新規サンプルを作成できます。")
+		st.rerun()
+with col_new2:
+	st.markdown("")
+
 with st.form("sample_form", clear_on_submit=False):
 	st.subheader("Add / Update Sample")
 	# Prefill fields from session_state when editing
@@ -587,20 +620,26 @@ with st.form("sample_form", clear_on_submit=False):
 	# Use session_state-backed composition text so preset selection can update it immediately
 	comp_text = comp_text_area.text_area("組成 JSON (例: {\"Ba\":0.5, \"Zr\":0.5})", value=st.session_state.get('composition_text', ''), height=120, key='composition_text')
 
-	# Single action: compute densities and save
-	submitted = st.form_submit_button("計算して保存")
+	# Two buttons: one for density calculation only, one for save
+	st.markdown("---")
+	btn_col1, btn_col2 = st.columns(2)
+	with btn_col1:
+		compute_only = st.form_submit_button("🧮 密度を計算", help="密度を計算して表示します（保存しません）")
+	with btn_col2:
+		submitted = st.form_submit_button("💾 計算して保存", help="密度を計算してサンプルを保存します")
 
-	# Compute density button must be outside the st.form (Streamlit forbids st.button inside form except form_submit_button)
-compute_col1, compute_col2 = st.columns([1,3])
-with compute_col1:
-	if st.button("相対密度を算出", key='compute_density_outside'):
-		# gather values (prefer session_state values to reflect current widgets)
-		# use pellet-specific geometry for density calculation
-		th = safe_float(st.session_state.get('pellet_thickness_mm') or 0.0)
-		dia = safe_float(st.session_state.get('pellet_diameter_mm') or 0.0)
-		pmass = safe_float(st.session_state.get('pellet_mass_g') or 0.0)
-		manual_theo = safe_float(st.session_state.get('theoretical_density_input') or 0.0)
-		z = safe_float(st.session_state.get('z_per_cell') or 1.0)
+# Handle compute_only button (density calculation without saving)
+if compute_only:
+	# Parse composition first
+	try:
+		composition = json.loads(comp_text) if comp_text and comp_text.strip() else {}
+		# use form variables directly (they are available after form submit)
+		th = safe_float(pellet_thickness_mm or 0.0)
+		dia = safe_float(pellet_diameter_mm or 0.0)
+		pmass = safe_float(pellet_mass_g or 0.0)
+		manual_theo = safe_float(theoretical_density_input or 0.0)
+		z = safe_float(z_per_cell or 1.0)
+		ucv_val = safe_float(unit_cell_vol or 0.0)
 		# validations
 		errs = []
 		if pmass <= 0:
@@ -624,15 +663,7 @@ with compute_col1:
 				st.error(e)
 		# compute theoretical: prefer manual, else from composition + unit_cell_vol using Z
 		theo = None
-		comp_dbg = {}
-		ucv_val = safe_float(st.session_state.get('unit_cell_vol') or 0.0)
-		comp_json = st.session_state.get('composition_text') or '{}'
-		# try parse composition; provide clearer message if parse fails
-		try:
-			comp_dbg = json.loads(comp_json) if comp_json and comp_json.strip() else {}
-		except Exception as e:
-			comp_dbg = {}
-			st.error(f'組成 JSON のパースに失敗しました: {e}')
+		comp_dbg = composition
 		# if manual theoretical given, use it
 		if manual_theo and manual_theo > 0:
 			theo = float(manual_theo)
@@ -683,8 +714,8 @@ with compute_col1:
 			st.info('相対密度は計算されませんでした（実測密度か理論密度が不足しています）。')
 		# rerun so the form widget bound to 'relative_density_pct' refreshes and shows updated value
 		st.rerun()
-with compute_col2:
-	st.markdown("")
+	except Exception as e:
+		st.error(f'密度計算エラー: {e}')
 
 # auto-reflect of computed values is active; display keys are set by compute handlers
 
