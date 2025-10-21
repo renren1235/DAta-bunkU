@@ -458,13 +458,17 @@ with st.form("sample_form", clear_on_submit=False):
 		synthesis_method = st.text_input("合成方法", value=st.session_state.get('synthesis_method', ''), key='synthesis_method')
 		calcination_temp_c = st.number_input("焼成温度 (℃)", value=safe_float(st.session_state.get('calcination_temp_c', 1200)), key='calcination_temp_c')
 		calcination_time_h = st.number_input("焼成時間 (h)", value=safe_float(st.session_state.get('calcination_time_h', 10.0)), format="%.2f", key='calcination_time_h')
-		# crystal system selection (common choices) with option to enter custom text
-		crystal_choices = ["(未指定)", "立方晶 (Cubic)", "正方晶 (Tetragonal)", "六方晶 (Hexagonal)", "直方晶 (Orthorhombic)", "単斜晶 (Monoclinic)", "三斜晶 (Triclinic)", "菱面体 (Rhombohedral)"]
-		crystal_system_sel = st.selectbox("結晶系", options=crystal_choices, index=0)
-		if crystal_system_sel == "(未指定)":
-			crystal_system = ""
-		else:
-			crystal_system = crystal_system_sel
+		
+		# crystal system: text input with preset buttons for common choices
+		crystal_system = st.text_input("結晶系 (自由入力)", value=st.session_state.get('crystal_system', editing.get('crystal_system', '')), key='crystal_system')
+		st.markdown("**よく使う結晶系:**")
+		crystal_presets = ["立方晶 (Cubic)", "正方晶 (Tetragonal)", "六方晶 (Hexagonal)", "直方晶 (Orthorhombic)", "単斜晶 (Monoclinic)", "三斜晶 (Triclinic)", "菱面体 (Rhombohedral)"]
+		cols_crystal = st.columns(len(crystal_presets))
+		for idx, preset in enumerate(crystal_presets):
+			with cols_crystal[idx]:
+				# Use a unique key for each button to avoid conflicts
+				if st.form_submit_button(preset.split()[0], key=f"crystal_preset_{idx}"):
+					st.session_state['crystal_system'] = preset
 		# lattice parameters are shown by default
 		st.markdown("---")
 		col_la, col_lb, col_lc = st.columns(3)
